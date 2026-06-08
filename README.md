@@ -29,6 +29,153 @@ Agent-Scholar model output -> Agent-Scholar LiveKit audio track -> Agent-Citizen
 
 Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime 或 Gemini Live。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions。
 
+## 劇情資料集
+
+可以用 `data/two_test.json` 這類資料集產生雙代理對話劇情。系統採用固定映射：
+
+- `human` -> Agent-Citizen
+- `gpt` / `system` -> Agent-Scholar，也就是被測語音模型
+- `conversations[:-1]` -> 歷史對話
+- `conversations[-1]` -> 開場白
+- `type` / `subtype` / `topic` / `goal` -> 場景設定
+- `question` / `multichoice` / `correct_answer` -> 測驗階段使用，不放進角色 prompt
+
+先把原始資料轉成 normalized scenario：
+
+```bash
+vox-symposium-scenario data/two_test.json data/scenarios/two_test.normalized.json --audio-dir data/test
+```
+
+只轉單一筆：
+
+```bash
+vox-symposium-scenario data/two_test.json data/scenarios/00000000.json --id 00000000 --audio-dir data/test
+```
+
+normalized scenario 的主要結構：
+
+```json
+{
+  "id": "00000000",
+  "agents": {
+    "citizen": {
+      "name": "Stephen V",
+      "source_role": "human",
+      "profile": "..."
+    },
+    "scholar": {
+      "name": "Hollis Lomax",
+      "source_role": "gpt",
+      "profile": "..."
+    }
+  },
+  "scene": {
+    "type": "Persuasion",
+    "subtype": "Service recommendation",
+    "topic": "Explaining the advantages of hiring a professional organizer.",
+    "goal": "Persuade a person to consider hiring a professional organizer to improve home efficiency."
+  },
+  "history": [],
+  "opening": {
+    "agent": "scholar",
+    "speaker": "Hollis Lomax",
+    "text": "(hesitantly) Well, I guess it would be nice to not have to search for my tools every time I need them...",
+    "audio": "data/test/instruct_00000000_9.wav"
+  },
+  "run": {
+    "dialogue_turns": 5
+  },
+  "evaluation": {
+    "ask_after_turns": 5,
+    "target_agent": "scholar",
+    "question": "Based on the dialogue...",
+    "choices": ["A. ...", "B. ...", "C. ...", "D. ..."],
+    "correct_answer": "C",
+    "question_audio": null
+  }
+}
+```
+
+執行時指定 scenario：
+
+```env
+SCENARIO_FILE=data/scenarios/00000000.json
+SCENARIO_DIALOGUE_TURNS=5
+```
+
+或直接從原始資料集選一筆：
+
+```env
+SCENARIO_FILE=data/two_test.json
+SCENARIO_ID=00000000
+SCENARIO_AUDIO_DIR=data/test
+SCENARIO_DIALOGUE_TURNS=5
+```
+
+目前 scenario 會自動產生兩個 agent 的 instructions。開場白播放、5 回合計數、以及播放 evaluation 題目音訊屬於下一層 runtime 控制；`evaluation.question_audio` 預留給你之後產生題目語音後填入。
+
+保存被測模型最後回答：
+
+```bash
+vox-symposium-scenario save-result data/scenarios/00000000.json data/results/00000000-run001.json --response "C. Skeptical but willing to listen"
+```
+
+如果最後回答是先存成文字檔：
+
+```bash
+vox-symposium-scenario save-result data/scenarios/00000000.json data/results/00000000-run001.json --response-file data/results/00000000-response.txt
+```
+
+輸出的 result 會保存題目、選項、正解、模型原始回答、抽取出的 `A/B/C/D`，以及 `is_correct`：
+
+```json
+{
+  "scenario_id": "00000000",
+  "run_id": "00000000-run001",
+  "evaluation": {
+    "question": "Based on the dialogue...",
+    "choices": ["A. ...", "B. ...", "C. ...", "D. ..."],
+    "correct_answer": "C"
+  },
+  "response": {
+    "text": "C. Skeptical but willing to listen",
+    "audio": null,
+    "choice": "C",
+    "is_correct": true
+  }
+}
+```
+
+自動跑一遍評測：
+
+```bash
+vox-symposium-evaluate data/scenarios/00000000.json data/results/00000000-auto001.json --run-id 00000000-auto001
+```
+
+也可以直接從原始資料集選一筆：
+
+```bash
+vox-symposium-evaluate data/two_test.json data/results/00000000-auto001.json --id 00000000 --audio-dir data/test --run-id 00000000-auto001
+```
+
+自動評測流程：
+
+- 播放 `opening.audio` 給下一位 agent
+- 兩個模型自動互相傳遞語音
+- 以 scholar 音訊輸出分段計算 5 次 scholar 回覆
+- 產生或讀取 evaluation question audio
+- 將 question audio 播給 scholar
+- 錄下 scholar 最後回答音訊
+- 保存 result 與 dialogue log
+
+如果 `evaluation.question_audio` 是空的，runner 會嘗試用 macOS `say` 產生題目語音。若系統語音服務不可用，請先準備題目 wav，然後執行：
+
+```bash
+vox-symposium-evaluate data/scenarios/00000000.json data/results/00000000-auto001.json --question-audio data/questions/00000000.wav
+```
+
+若 provider 有輸出文字 transcript，runner 會自動從 scholar 最後回答抽取 `A/B/C/D`。若沒有 transcript，result 仍會保存 `response.audio`，但 `response.choice` 會是 `null`；此時可以先轉寫音檔，再用 `save-result` 保存文字版答案。
+
 ## 安裝
 
 ```bash

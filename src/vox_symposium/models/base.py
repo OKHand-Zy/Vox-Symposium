@@ -18,6 +18,12 @@ class RealtimeAudioModel(ABC):
     async def send_audio(self, audio: PcmAudio) -> None:
         raise NotImplementedError
 
+    async def start_audio_turn(self) -> None:
+        return None
+
+    async def end_audio_turn(self) -> None:
+        return None
+
     @abstractmethod
     def receive_audio(self) -> AsyncIterator[PcmAudio]:
         raise NotImplementedError
@@ -25,3 +31,7 @@ class RealtimeAudioModel(ABC):
     @abstractmethod
     async def close(self) -> None:
         raise NotImplementedError
+
+    async def receive_text(self) -> AsyncIterator[str]:
+        if False:
+            yield ""

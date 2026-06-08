@@ -29,6 +29,7 @@ class OpenAIRealtimeModel(RealtimeAudioModel):
         self.instructions = instructions
         self._ws: ClientConnection | None = None
         self._audio_out: asyncio.Queue[PcmAudio | None] = asyncio.Queue(maxsize=100)
+        self._text_out: asyncio.Queue[str | None] = asyncio.Queue(maxsize=100)
         self._reader_task: asyncio.Task[None] | None = None
 
     async def connect(self) -> None:
@@ -92,12 +93,20 @@ class OpenAIRealtimeModel(RealtimeAudioModel):
                 return
             yield item
 
+    async def receive_text(self) -> AsyncIterator[str]:
+        while True:
+            item = await self._text_out.get()
+            if item is None:
+                return
+            yield item
+
     async def close(self) -> None:
         if self._reader_task:
             self._reader_task.cancel()
         if self._ws:
             await self._ws.close()
         await self._audio_out.put(None)
+        await self._text_out.put(None)
 
     async def _send(self, event: dict) -> None:
         if self._ws is None:
@@ -120,7 +129,26 @@ class OpenAIRealtimeModel(RealtimeAudioModel):
                                 channels=1,
                             )
                         )
+                elif event_type in {
+                    "response.audio_transcript.delta",
+                    "response.output_audio_transcript.delta",
+                    "response.text.delta",
+                    "response.output_text.delta",
+                }:
+                    delta = event.get("delta")
+                    if delta:
+                        await self._text_out.put(delta)
+                elif event_type in {
+                    "response.audio_transcript.done",
+                    "response.output_audio_transcript.done",
+                    "response.text.done",
+                    "response.output_text.done",
+                }:
+                    text = event.get("transcript") or event.get("text")
+                    if text:
+                        await self._text_out.put(text)
                 elif event_type == "error":
                     raise RuntimeError(f"OpenAI realtime error: {event}")
         finally:
             await self._audio_out.put(None)
+            await self._text_out.put(None)

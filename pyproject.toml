@@ -13,6 +13,8 @@ dependencies = [
 
 [project.scripts]
 vox-symposium = "vox_symposium.main:main"
+vox-symposium-evaluate = "vox_symposium.evaluation:main"
+vox-symposium-scenario = "vox_symposium.scenario:main"
 
 [build-system]
 requires = ["hatchling"]

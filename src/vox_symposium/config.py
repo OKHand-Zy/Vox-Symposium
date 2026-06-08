@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 try:
     from dotenv import load_dotenv
@@ -54,6 +54,7 @@ def load_settings() -> Settings:
             default="You are Agent-Scholar, the voice agent under test. Keep replies concise and conversational.",
         ),
     )
+    agent_citizen, agent_scholar = _apply_scenario_instructions(agent_citizen, agent_scholar)
     _validate_provider(agent_citizen)
     _validate_provider(agent_scholar)
 
@@ -78,6 +79,29 @@ def _env(primary: str, legacy: str, *, default: str) -> str:
     return os.getenv(primary) or os.getenv(legacy) or default
 
 
+def _apply_scenario_instructions(
+    agent_citizen: AgentConfig,
+    agent_scholar: AgentConfig,
+) -> tuple[AgentConfig, AgentConfig]:
+    scenario_file = os.getenv("SCENARIO_FILE")
+    if not scenario_file:
+        return agent_citizen, agent_scholar
+
+    from vox_symposium.scenario import load_scenario
+
+    scenario = load_scenario(
+        scenario_file,
+        scenario_id=os.getenv("SCENARIO_ID"),
+        scenario_index=_optional_int_env("SCENARIO_INDEX"),
+        audio_dir=os.getenv("SCENARIO_AUDIO_DIR"),
+        dialogue_turns=_int_env("SCENARIO_DIALOGUE_TURNS", 5),
+    )
+    return (
+        replace(agent_citizen, instructions=scenario.build_instructions("citizen")),
+        replace(agent_scholar, instructions=scenario.build_instructions("scholar")),
+    )
+
+
 def _uses_provider(provider: str, *agents: AgentConfig) -> bool:
     return any(agent.provider == provider for agent in agents)
 
@@ -100,6 +124,16 @@ def _int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None:
         return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+
+
+def _optional_int_env(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return None
     try:
         return int(raw)
     except ValueError as exc:

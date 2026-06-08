@@ -1,5 +1,6 @@
 .env
 .venv/
+.DS_Store
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -8,4 +9,9 @@ build/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-data/
+data/*
+!data/scenarios/
+!data/scenarios/*.json
+!data/results/
+!data/results/*.json
+data/results/*-artifacts/
