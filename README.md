@@ -29,18 +29,40 @@ Agent-Scholar model output -> Agent-Scholar LiveKit audio track -> Agent-Citizen
 
 Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime 或 Gemini Live。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions。
 
-## 劇情資料集
+## OmniCharacter-plus 快速使用
 
-可以用 `data/two_test.json` 這類資料集產生雙代理對話劇情。系統採用固定映射：
+`OmniCharacter-plus` 分支新增資料集驅動的雙語音代理評測流程。它會把 `data/two_test.json` 轉成 scenario，讓兩個 realtime audio model 延續劇情對話，完成指定回合數後播放測驗題音訊給被測模型，最後保存回答、音檔與是否答對。
 
-- `human` -> Agent-Citizen
-- `gpt` / `system` -> Agent-Scholar，也就是被測語音模型
-- `conversations[:-1]` -> 歷史對話
-- `conversations[-1]` -> 開場白
+資料集欄位固定映射：
+
+- `human` -> Agent-Citizen，模擬對話對象
+- `gpt` / `system` -> Agent-Scholar，被測語音模型
+- `conversations[:-1]` -> 歷史對話，放進 prompt
+- `conversations[-1]` -> 開場白，評測開始時自動播放
 - `type` / `subtype` / `topic` / `goal` -> 場景設定
-- `question` / `multichoice` / `correct_answer` -> 測驗階段使用，不放進角色 prompt
+- `question` / `multichoice` / `correct_answer` -> 測驗階段使用，不會放進角色 prompt
 
-先把原始資料轉成 normalized scenario：
+**1. 安裝與 provider 設定**
+
+```bash
+conda activate vox-symposium
+pip install -r requirements.txt
+pip install -e .
+```
+
+`.env` 範例，兩邊都使用 Gemini：
+
+```env
+AGENT_CITIZEN_PROVIDER=gemini
+AGENT_SCHOLAR_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-api-key
+```
+
+如果 `.env` 同時有 `GOOGLE_API_KEY` 和 `GEMINI_API_KEY`，Google SDK 會優先使用 `GOOGLE_API_KEY`，執行時會看到提示。要明確使用 `GEMINI_API_KEY`，請移除或 unset `GOOGLE_API_KEY`。
+
+**2. 轉換 scenario**
+
+轉換完整資料集：
 
 ```bash
 vox-symposium-scenario data/two_test.json data/scenarios/two_test.normalized.json --audio-dir data/test
@@ -52,129 +74,168 @@ vox-symposium-scenario data/two_test.json data/scenarios/two_test.normalized.jso
 vox-symposium-scenario data/two_test.json data/scenarios/00000000.json --id 00000000 --audio-dir data/test
 ```
 
-normalized scenario 的主要結構：
+已轉好的 scenario 主要包含：
 
 ```json
 {
   "id": "00000000",
-  "agents": {
-    "citizen": {
-      "name": "Stephen V",
-      "source_role": "human",
-      "profile": "..."
-    },
-    "scholar": {
-      "name": "Hollis Lomax",
-      "source_role": "gpt",
-      "profile": "..."
-    }
-  },
-  "scene": {
-    "type": "Persuasion",
-    "subtype": "Service recommendation",
-    "topic": "Explaining the advantages of hiring a professional organizer.",
-    "goal": "Persuade a person to consider hiring a professional organizer to improve home efficiency."
-  },
   "history": [],
   "opening": {
     "agent": "scholar",
-    "speaker": "Hollis Lomax",
-    "text": "(hesitantly) Well, I guess it would be nice to not have to search for my tools every time I need them...",
     "audio": "data/test/instruct_00000000_9.wav"
   },
   "run": {
     "dialogue_turns": 5
   },
   "evaluation": {
-    "ask_after_turns": 5,
-    "target_agent": "scholar",
     "question": "Based on the dialogue...",
     "choices": ["A. ...", "B. ...", "C. ...", "D. ..."],
     "correct_answer": "C",
-    "question_audio": null
+    "question_audio": "question_00000000.mp3"
   }
 }
 ```
 
-執行時指定 scenario：
+**3. 準備測驗題音訊**
 
-```env
-SCENARIO_FILE=data/scenarios/00000000.json
-SCENARIO_DIALOGUE_TURNS=5
+`evaluation.question_audio` 可以是 `.wav` 或 `.mp3`。相對路徑會依序嘗試：
+
+- 目前工作目錄
+- scenario JSON 所在資料夾
+- `data/question/`
+
+因此這種設定是有效的：
+
+```json
+"question_audio": "question_00000000.mp3"
 ```
 
-或直接從原始資料集選一筆：
+只要實際檔案存在：
 
-```env
-SCENARIO_FILE=data/two_test.json
-SCENARIO_ID=00000000
-SCENARIO_AUDIO_DIR=data/test
-SCENARIO_DIALOGUE_TURNS=5
+```text
+data/question/question_00000000.mp3
 ```
 
-目前 scenario 會自動產生兩個 agent 的 instructions。開場白播放、5 回合計數、以及播放 evaluation 題目音訊屬於下一層 runtime 控制；`evaluation.question_audio` 預留給你之後產生題目語音後填入。
+runner 會自動用 `ffmpeg` 把 MP3 轉成 24 kHz mono PCM WAV 後送給模型。如果沒有設定 `question_audio`，runner 會嘗試用 macOS `say` 產生題目音訊；這在某些 sandbox 或 headless 環境可能產生失敗，所以建議正式評測直接提供題目音檔。
 
-保存被測模型最後回答：
+**4. 跑 smoke test**
+
+先跑 2 次 scholar 回覆，確認整條流程能完成：
 
 ```bash
-vox-symposium-scenario save-result data/scenarios/00000000.json data/results/00000000-run001.json --response "C. Skeptical but willing to listen"
+python3 -m vox_symposium.evaluation \
+  data/scenarios/00000000.json \
+  data/results/00000000-smoke.json \
+  --run-id 00000000-smoke \
+  --dialogue-turns 2
 ```
 
-如果最後回答是先存成文字檔：
+成功後會輸出類似：
+
+```text
+Playing opening from scholar into citizen: data/test/instruct_00000000_9.wav
+Captured citizen turn 1; scholar_turns=0
+Captured scholar turn 2; scholar_turns=1
+Captured citizen turn 3; scholar_turns=1
+Captured scholar turn 4; scholar_turns=2
+Saved evaluation result: data/results/00000000-smoke.json (...)
+```
+
+**5. 跑完整評測**
+
+預設是 5 次 scholar 回覆後播放題目：
 
 ```bash
-vox-symposium-scenario save-result data/scenarios/00000000.json data/results/00000000-run001.json --response-file data/results/00000000-response.txt
+python3 -m vox_symposium.evaluation \
+  data/scenarios/00000000.json \
+  data/results/00000000-auto001.json \
+  --run-id 00000000-auto001
 ```
 
-輸出的 result 會保存題目、選項、正解、模型原始回答、抽取出的 `A/B/C/D`，以及 `is_correct`：
+如果模型回覆太長或 websocket keepalive timeout，可以加快音訊注入速度：
+
+```bash
+python3 -m vox_symposium.evaluation \
+  data/scenarios/00000000.json \
+  data/results/00000000-auto002.json \
+  --run-id 00000000-auto002 \
+  --audio-speed 16
+```
+
+`--audio-speed 1` 是 real-time 速度；預設為 `8`。數字越大，runner 越快把音訊送給另一個模型，較不容易因整體評測時間太長而斷線。
+
+**6. 評測輸出**
+
+主要 result：
+
+```text
+data/results/00000000-auto001.json
+```
+
+附檔 artifacts：
+
+```text
+data/results/00000000-auto001-artifacts/
+  dialogue-01-citizen.wav
+  dialogue-02-scholar.wav
+  ...
+  question.wav
+  scholar-answer.wav
+  dialogue-log.json
+```
+
+result 會保存：
 
 ```json
 {
   "scenario_id": "00000000",
-  "run_id": "00000000-run001",
+  "run_id": "00000000-auto001",
   "evaluation": {
     "question": "Based on the dialogue...",
     "choices": ["A. ...", "B. ...", "C. ...", "D. ..."],
     "correct_answer": "C"
   },
   "response": {
-    "text": "C. Skeptical but willing to listen",
-    "audio": null,
-    "choice": "C",
-    "is_correct": true
+    "text": "",
+    "audio": "data/results/00000000-auto001-artifacts/scholar-answer.wav",
+    "choice": null,
+    "is_correct": null
   }
 }
 ```
 
-自動跑一遍評測：
+如果 provider 回傳 output transcript，runner 會自動從最後回答抽取 `A/B/C/D` 並填入 `choice` / `is_correct`。如果沒有 transcript，仍會保存 `scholar-answer.wav`；你可以轉寫後用 `save-result` 補文字答案。
+
+**7. 手動保存或覆蓋最後答案**
+
+直接保存文字答案：
 
 ```bash
-vox-symposium-evaluate data/scenarios/00000000.json data/results/00000000-auto001.json --run-id 00000000-auto001
+vox-symposium-scenario save-result \
+  data/scenarios/00000000.json \
+  data/results/00000000-run001.json \
+  --run-id 00000000-run001 \
+  --response "C. Skeptical but willing to listen"
 ```
 
-也可以直接從原始資料集選一筆：
+從文字檔讀取答案：
 
 ```bash
-vox-symposium-evaluate data/two_test.json data/results/00000000-auto001.json --id 00000000 --audio-dir data/test --run-id 00000000-auto001
+vox-symposium-scenario save-result \
+  data/scenarios/00000000.json \
+  data/results/00000000-run001.json \
+  --response-file data/results/00000000-response.txt
 ```
 
-自動評測流程：
+`save-result` 會自動抽取 `A/B/C/D`，也可以從完整選項文字反推答案。例如只回答 `Skeptical but willing to listen` 也會比對成 `C`。
 
-- 播放 `opening.audio` 給下一位 agent
-- 兩個模型自動互相傳遞語音
-- 以 scholar 音訊輸出分段計算 5 次 scholar 回覆
-- 產生或讀取 evaluation question audio
-- 將 question audio 播給 scholar
-- 錄下 scholar 最後回答音訊
-- 保存 result 與 dialogue log
+**常見問題**
 
-如果 `evaluation.question_audio` 是空的，runner 會嘗試用 macOS `say` 產生題目語音。若系統語音服務不可用，請先準備題目 wav，然後執行：
-
-```bash
-vox-symposium-evaluate data/scenarios/00000000.json data/results/00000000-auto001.json --question-audio data/questions/00000000.wav
-```
-
-若 provider 有輸出文字 transcript，runner 會自動從 scholar 最後回答抽取 `A/B/C/D`。若沒有 transcript，result 仍會保存 `response.audio`，但 `response.choice` 會是 `null`；此時可以先轉寫音檔，再用 `save-result` 保存文字版答案。
+- `Missing required environment variable: OPENAI_API_KEY`：evaluation runner 沒讀到 `.env` 裡的 provider 設定，或沒有設定 `AGENT_CITIZEN_PROVIDER=gemini` / `AGENT_SCHOLAR_PROVIDER=gemini`。確認 `.env` 在專案根目錄，並重新執行。
+- `Both GOOGLE_API_KEY and GEMINI_API_KEY are set`：Google SDK 提示會使用 `GOOGLE_API_KEY`。這不是錯誤；若不想使用它，請 unset `GOOGLE_API_KEY`。
+- `Question audio does not exist`：確認 `evaluation.question_audio` 指向的檔案存在。若 JSON 寫 `"question_00000000.mp3"`，檔案可放在 `data/question/question_00000000.mp3`。
+- `ConnectionClosedError` 或 keepalive timeout：先用 `--dialogue-turns 2` 做 smoke test；完整評測可加 `--audio-speed 16`，並確保角色回覆不要太長。
+- `choice` 是 `null`：provider 沒回傳 transcript。先聽 `scholar-answer.wav` 或用 STT 轉寫，再用 `save-result` 保存文字答案。
 
 ## 安裝
 
