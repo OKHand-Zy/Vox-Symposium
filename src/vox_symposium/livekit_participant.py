@@ -13,6 +13,7 @@ from vox_symposium.audio import PcmAudio, normalize_audio, rechunk_pcm16
 from vox_symposium.config import AgentConfig, Settings
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.models.gemini_live import GeminiLiveModel
+from vox_symposium.models.local_voice import LocalVoiceConfig, LocalVoiceModel
 from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
 
 
@@ -197,5 +198,25 @@ def build_model(settings: Settings, agent: AgentConfig) -> RealtimeAudioModel:
             api_key=settings.gemini_api_key,
             model=settings.gemini_model,
             instructions=agent.instructions,
+        )
+    if provider in {"local", "hf"}:
+        return LocalVoiceModel(
+            LocalVoiceConfig(
+                provider=settings.local_model_provider,
+                model=settings.local_model,
+                instructions=agent.instructions,
+                device=settings.local_model_device,
+                dtype=settings.local_model_dtype,
+                attn_implementation=settings.local_model_attn_implementation,
+                ref_audio_path=settings.local_model_ref_audio,
+                language=settings.local_model_language,
+                turn_detection=settings.local_model_turn_detection,
+                silero_threshold=settings.local_model_silero_threshold,
+                turn_silence_ms=settings.local_model_turn_silence_ms,
+                min_turn_ms=settings.local_model_min_turn_ms,
+                chunk_ms=settings.local_model_chunk_ms,
+                max_new_tokens=settings.local_model_max_new_tokens,
+                qwen_speaker=settings.local_model_qwen_speaker,
+            )
         )
     raise RuntimeError(f"Unsupported provider for {agent.identity}: {agent.provider}")

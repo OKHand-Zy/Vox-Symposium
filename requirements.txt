@@ -2,4 +2,5 @@ google-genai>=1.45.0
 livekit>=1.0.18
 livekit-api>=1.0.5
 python-dotenv>=1.0.1
+silero-vad
 websockets>=13.1

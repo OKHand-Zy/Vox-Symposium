@@ -32,6 +32,20 @@ class Settings:
     openai_voice: str
     gemini_api_key: str | None
     gemini_model: str
+    local_model_provider: str
+    local_model: str
+    local_model_device: str
+    local_model_dtype: str
+    local_model_attn_implementation: str
+    local_model_ref_audio: str | None
+    local_model_language: str
+    local_model_turn_detection: bool
+    local_model_silero_threshold: float
+    local_model_turn_silence_ms: int
+    local_model_min_turn_ms: int
+    local_model_chunk_ms: int
+    local_model_max_new_tokens: int
+    local_model_qwen_speaker: str
 
 
 def load_settings() -> Settings:
@@ -71,6 +85,20 @@ def load_settings() -> Settings:
         openai_voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
         gemini_api_key=_required("GEMINI_API_KEY") if _uses_provider("gemini", agent_citizen, agent_scholar) else None,
         gemini_model=os.getenv("GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview"),
+        local_model_provider=os.getenv("LOCAL_MODEL_PROVIDER", "auto"),
+        local_model=os.getenv("LOCAL_MODEL") or os.getenv("LOCAL_MODEL_NAME", "openbmb/MiniCPM-o-4_5"),
+        local_model_device=os.getenv("LOCAL_MODEL_DEVICE", "auto"),
+        local_model_dtype=os.getenv("LOCAL_MODEL_DTYPE", "auto"),
+        local_model_attn_implementation=os.getenv("LOCAL_MODEL_ATTN_IMPLEMENTATION", "sdpa"),
+        local_model_ref_audio=os.getenv("LOCAL_MODEL_REF_AUDIO") or None,
+        local_model_language=os.getenv("LOCAL_MODEL_LANGUAGE", "en"),
+        local_model_turn_detection=_bool_env("LOCAL_MODEL_TURN_DETECTION", True),
+        local_model_silero_threshold=_float_env("LOCAL_MODEL_SILERO_THRESHOLD", 0.5),
+        local_model_turn_silence_ms=_int_env("LOCAL_MODEL_TURN_SILENCE_MS", 700),
+        local_model_min_turn_ms=_int_env("LOCAL_MODEL_MIN_TURN_MS", 400),
+        local_model_chunk_ms=_int_env("LOCAL_MODEL_CHUNK_MS", 1000),
+        local_model_max_new_tokens=_int_env("LOCAL_MODEL_MAX_NEW_TOKENS", 512),
+        local_model_qwen_speaker=os.getenv("LOCAL_MODEL_QWEN_SPEAKER", "Ethan"),
     )
 
 
@@ -83,9 +111,9 @@ def _uses_provider(provider: str, *agents: AgentConfig) -> bool:
 
 
 def _validate_provider(agent: AgentConfig) -> None:
-    if agent.provider not in {"openai", "gemini"}:
+    if agent.provider not in {"openai", "gemini", "local", "hf"}:
         raise RuntimeError(
-            f"{agent.identity} provider must be 'openai' or 'gemini', got {agent.provider!r}"
+            f"{agent.identity} provider must be 'openai', 'gemini', 'local', or 'hf', got {agent.provider!r}"
         )
 
 
@@ -104,3 +132,25 @@ def _int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean, got {raw!r}")

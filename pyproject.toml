@@ -8,7 +8,21 @@ dependencies = [
     "livekit>=1.0.18",
     "livekit-api>=1.0.5",
     "python-dotenv>=1.0.1",
+    "silero-vad",
     "websockets>=13.1",
+]
+
+[project.optional-dependencies]
+local = [
+    "accelerate",
+    "librosa",
+    "minicpmo-utils[all]>=1.0.5",
+    "numpy",
+    "qwen-omni-utils",
+    "soundfile",
+    "torch>=2.3.0,<=2.8.0",
+    "torchaudio<=2.8.0",
+    "transformers==4.51.0",
 ]
 
 [project.scripts]
