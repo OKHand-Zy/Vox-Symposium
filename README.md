@@ -152,17 +152,17 @@ python3 -m vox_symposium.evaluation \
   --run-id 00000000-auto001
 ```
 
-如果模型回覆太長或 websocket keepalive timeout，可以加快音訊注入速度：
+如果模型回覆太長或 websocket keepalive timeout，可以顯式加快音訊注入速度：
 
 ```bash
 python3 -m vox_symposium.evaluation \
   data/scenarios/00000000.json \
   data/results/00000000-auto002.json \
   --run-id 00000000-auto002 \
-  --audio-speed 16
+  --audio-speed 8
 ```
 
-`--audio-speed 1` 是 real-time 速度；預設為 `8`。數字越大，runner 越快把音訊送給另一個模型，較不容易因整體評測時間太長而斷線。
+`--audio-speed 1` 是 real-time 速度，也是預設值。數字越大，runner 越快把音訊送給另一個模型，較不容易因整體評測時間太長而斷線；但高於 real-time 可能影響 streaming VAD / turn detection，因此正式比較建議固定並記錄這個參數。
 
 **6. 評測輸出**
 
@@ -234,7 +234,7 @@ vox-symposium-scenario save-result \
 - `Missing required environment variable: OPENAI_API_KEY`：evaluation runner 沒讀到 `.env` 裡的 provider 設定，或沒有設定 `AGENT_CITIZEN_PROVIDER=gemini` / `AGENT_SCHOLAR_PROVIDER=gemini`。確認 `.env` 在專案根目錄，並重新執行。
 - `Both GOOGLE_API_KEY and GEMINI_API_KEY are set`：Google SDK 提示會使用 `GOOGLE_API_KEY`。這不是錯誤；若不想使用它，請 unset `GOOGLE_API_KEY`。
 - `Question audio does not exist`：確認 `evaluation.question_audio` 指向的檔案存在。若 JSON 寫 `"question_00000000.mp3"`，檔案可放在 `data/question/question_00000000.mp3`。
-- `ConnectionClosedError` 或 keepalive timeout：先用 `--dialogue-turns 2` 做 smoke test；完整評測可加 `--audio-speed 16`，並確保角色回覆不要太長。
+- `ConnectionClosedError` 或 keepalive timeout：先用 `--dialogue-turns 2` 做 smoke test；完整評測可顯式加 `--audio-speed 8` 或 `--audio-speed 16`，並確保角色回覆不要太長。
 - `choice` 是 `null`：provider 沒回傳 transcript。先聽 `scholar-answer.wav` 或用 STT 轉寫，再用 `save-result` 保存文字答案。
 
 ## 安裝

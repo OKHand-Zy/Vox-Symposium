@@ -527,7 +527,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--artifact-dir", help="Directory for dialogue logs and captured wav files.")
     parser.add_argument("--run-id", help="Stable run id for this evaluation.")
     parser.add_argument("--frame-ms", type=int, default=20, help="Audio frame size used to stream wav files.")
-    parser.add_argument("--audio-speed", type=float, default=float(os.getenv("EVALUATION_AUDIO_SPEED", "8.0")), help="Audio injection speed. 1.0 is realtime; 8.0 sends eight times faster; 0 disables sleeps.")
+    parser.add_argument("--audio-speed", type=float, default=float(os.getenv("EVALUATION_AUDIO_SPEED", "1.0")), help="Audio injection speed. 1.0 is realtime; higher values send audio faster and may affect streaming VAD/turn detection; 0 disables sleeps.")
     parser.add_argument("--idle-timeout", type=float, default=1.5, help="Silence timeout used to end an utterance.")
     parser.add_argument("--max-utterance-seconds", type=float, default=30.0, help="Maximum seconds to wait for one utterance.")
     parser.add_argument("--no-tts", action="store_true", help="Require question audio instead of generating it with macOS say.")
