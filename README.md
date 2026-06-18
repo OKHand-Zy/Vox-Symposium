@@ -365,3 +365,5 @@ LIVEKIT_ROOM=test-room
 ## 擴充其他模型
 
 Provider adapter 放在 `src/vox_symposium/models/`。之後如果要改接 self-hosted full-duplex model，只要實作 `RealtimeAudioModel` 介面，並在 `build_model()` 中註冊新的 provider。
+
+如果要使用自己的本地 Hugging Face 即時語音模型，請看 [doc/local-hf-realtime-model.md](doc/local-hf-realtime-model.md)。

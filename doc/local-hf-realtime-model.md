@@ -1,0 +1,314 @@
+# 使用自己的本地 Hugging Face 即時語音模型
+
+這份文件說明如果要把 Vox Symposium 從 OpenAI Realtime / Gemini Live 改接自己的本地 Hugging Face 語音模型，需要把模型放在哪、程式要新增哪個 adapter，以及 `.env` 要怎麼設定。
+
+目前專案內建 provider 只有：
+
+- `openai`：OpenAI Realtime
+- `gemini`：Gemini Live
+
+所以本地 Hugging Face 模型不能只靠 `.env` 切換，必須新增一個 provider adapter，實作 `RealtimeAudioModel` 介面，再把它註冊到 `build_model()`。
+
+## 放置位置
+
+建議使用下面的位置：
+
+```text
+Vox-Symposium/
+  models/
+    hf/
+      your-model/
+        config.json
+        model.safetensors
+        tokenizer.json
+        ...
+  src/
+    vox_symposium/
+      models/
+        local_hf_realtime.py
+  doc/
+    local-hf-realtime-model.md
+```
+
+- 模型權重：建議放在 `models/hf/your-model/`，或使用 Hugging Face cache 裡的本地路徑。
+- adapter 程式：放在 `src/vox_symposium/models/local_hf_realtime.py`。
+- provider 設定：放在專案根目錄 `.env`。
+
+如果模型權重很大，不建議 commit 到 git。可以把 `models/` 加到 `.gitignore`，只在文件或 `.env.example` 記錄路徑。
+
+## 模型需要提供的能力
+
+Vox Symposium 的 participant 會做兩件事：
+
+1. 從 LiveKit 收到對方音訊，呼叫 `send_audio()` 持續送進模型。
+2. 從模型拿到輸出音訊，透過 `receive_audio()` 持續發布回 LiveKit。
+
+因此本地 Hugging Face 模型最好能支援 streaming audio input / streaming audio output。若你的模型只能「整段音訊輸入，整段音訊輸出」，也可以接，但 adapter 需要自己處理：
+
+- audio buffer
+- VAD 或 turn detection
+- 何時開始推論
+- 何時把模型輸出切成小段 PCM 丟給 `receive_audio()`
+
+專案目前內部音訊格式以 PCM16 mono 為主。adapter 要宣告模型吃的 sample rate 與輸出的 sample rate，例如：
+
+```python
+input_sample_rate = 16_000
+output_sample_rate = 24_000
+```
+
+LiveKit 送進來的音訊會依照 `input_sample_rate` 轉成 mono PCM16；模型輸出的 `PcmAudio` 也會在發布回 LiveKit 前自動轉成 LiveKit publish sample rate。
+
+## 新增 adapter
+
+新增檔案：
+
+```text
+src/vox_symposium/models/local_hf_realtime.py
+```
+
+範本：
+
+```python
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+
+from vox_symposium.audio import PcmAudio, normalize_audio
+from vox_symposium.models.base import RealtimeAudioModel
+
+
+class LocalHFRealtimeModel(RealtimeAudioModel):
+    input_sample_rate = 16_000
+    output_sample_rate = 24_000
+
+    def __init__(
+        self,
+        *,
+        model_path: str,
+        instructions: str,
+        device: str = "cuda",
+    ) -> None:
+        self.model_path = model_path
+        self.instructions = instructions
+        self.device = device
+        self._audio_in: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=100)
+        self._audio_out: asyncio.Queue[PcmAudio | None] = asyncio.Queue(maxsize=100)
+        self._worker_task: asyncio.Task[None] | None = None
+        self._model = None
+
+    async def connect(self) -> None:
+        # 在這裡載入你的 Hugging Face 模型。
+        # 例如 transformers / torch / 自己封裝的 realtime engine。
+        #
+        # self._model = load_your_model(self.model_path, device=self.device)
+        self._worker_task = asyncio.create_task(self._run_model_loop(), name="local-hf-realtime")
+
+    async def send_audio(self, audio: PcmAudio) -> None:
+        pcm = normalize_audio(
+            audio.data,
+            from_rate=audio.sample_rate,
+            to_rate=self.input_sample_rate,
+            channels=audio.channels,
+        )
+        if pcm:
+            await self._audio_in.put(pcm)
+
+    async def receive_audio(self) -> AsyncIterator[PcmAudio]:
+        while True:
+            item = await self._audio_out.get()
+            if item is None:
+                return
+            yield item
+
+    async def close(self) -> None:
+        if self._worker_task:
+            self._worker_task.cancel()
+        await self._audio_in.put(None)
+        await self._audio_out.put(None)
+
+    async def _run_model_loop(self) -> None:
+        # 這裡要換成你的模型實際 streaming 推論邏輯。
+        # 重點是：從 self._audio_in 讀 PCM16 bytes，並把輸出的 PCM16 bytes
+        # 包成 PcmAudio 放進 self._audio_out。
+        try:
+            while True:
+                chunk = await self._audio_in.get()
+                if chunk is None:
+                    return
+
+                # pseudo code:
+                # output_chunks = self._model.stream_audio(
+                #     chunk,
+                #     sample_rate=self.input_sample_rate,
+                #     instructions=self.instructions,
+                # )
+                # for output_pcm in output_chunks:
+                #     await self._audio_out.put(
+                #         PcmAudio(
+                #             data=output_pcm,
+                #             sample_rate=self.output_sample_rate,
+                #             channels=1,
+                #         )
+                #     )
+        finally:
+            await self._audio_out.put(None)
+```
+
+這個範本只定義接線方式，不能直接產生模型音訊。你需要把 `connect()` 和 `_run_model_loop()` 裡的 pseudo code 換成自己的 Hugging Face 模型呼叫方式。
+
+## 註冊 provider
+
+修改 `src/vox_symposium/config.py`。
+
+`Settings` 加上本地 HF 設定：
+
+```python
+local_hf_model_path: str | None
+local_hf_device: str
+```
+
+`load_settings()` 裡加上：
+
+```python
+local_hf_model_path=(
+    _required("LOCAL_HF_MODEL_PATH")
+    if _uses_provider("local_hf", agent_citizen, agent_scholar)
+    else None
+),
+local_hf_device=os.getenv("LOCAL_HF_DEVICE", "cuda"),
+```
+
+`_validate_provider()` 改成允許 `local_hf`：
+
+```python
+if agent.provider not in {"openai", "gemini", "local_hf"}:
+    raise RuntimeError(
+        f"{agent.identity} provider must be 'openai', 'gemini', or 'local_hf', got {agent.provider!r}"
+    )
+```
+
+接著修改 `src/vox_symposium/livekit_participant.py`。
+
+加入 import：
+
+```python
+from vox_symposium.models.local_hf_realtime import LocalHFRealtimeModel
+```
+
+在 `build_model()` 加上：
+
+```python
+if provider == "local_hf":
+    if settings.local_hf_model_path is None:
+        raise RuntimeError("LOCAL_HF_MODEL_PATH is required when a participant uses provider=local_hf")
+    return LocalHFRealtimeModel(
+        model_path=settings.local_hf_model_path,
+        device=settings.local_hf_device,
+        instructions=agent.instructions,
+    )
+```
+
+## `.env` 範例
+
+只把 Agent-Scholar 換成本地 HF 模型，Agent-Citizen 仍使用 Gemini：
+
+```env
+LIVEKIT_URL=wss://your-livekit-url
+LIVEKIT_API_KEY=your-livekit-api-key
+LIVEKIT_API_SECRET=your-livekit-api-secret
+
+AGENT_CITIZEN_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-api-key
+
+AGENT_SCHOLAR_PROVIDER=local_hf
+LOCAL_HF_MODEL_PATH=models/hf/your-model
+LOCAL_HF_DEVICE=cuda
+```
+
+兩邊都使用本地 HF 模型：
+
+```env
+LIVEKIT_URL=wss://your-livekit-url
+LIVEKIT_API_KEY=your-livekit-api-key
+LIVEKIT_API_SECRET=your-livekit-api-secret
+
+AGENT_CITIZEN_PROVIDER=local_hf
+AGENT_SCHOLAR_PROVIDER=local_hf
+LOCAL_HF_MODEL_PATH=models/hf/your-model
+LOCAL_HF_DEVICE=cuda
+```
+
+如果兩個角色要用不同本地模型，建議把設定拆成：
+
+```env
+AGENT_CITIZEN_PROVIDER=local_hf
+AGENT_CITIZEN_HF_MODEL_PATH=models/hf/citizen-model
+
+AGENT_SCHOLAR_PROVIDER=local_hf
+AGENT_SCHOLAR_HF_MODEL_PATH=models/hf/scholar-model
+```
+
+這種寫法需要再把 `Settings` 和 `build_model()` 改成依照 agent identity 讀不同路徑。
+
+## 依賴安裝
+
+依照你的模型需要安裝 Hugging Face / PyTorch 相關套件，例如：
+
+```bash
+pip install torch transformers accelerate safetensors
+```
+
+如果模型需要 GPU，請確認 PyTorch 版本與 CUDA 版本相容。macOS 可以先用：
+
+```env
+LOCAL_HF_DEVICE=mps
+```
+
+或 CPU：
+
+```env
+LOCAL_HF_DEVICE=cpu
+```
+
+## 測試
+
+安裝本專案：
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+啟動：
+
+```bash
+vox-symposium
+```
+
+如果只想先測本地 HF 那一邊：
+
+```bash
+vox-symposium --participant agent-scholar
+```
+
+常見問題：
+
+- `provider must be 'openai' or 'gemini'`：代表 `config.py` 還沒把 `local_hf` 加進 `_validate_provider()`。
+- `Unsupported provider`：代表 `livekit_participant.py` 的 `build_model()` 還沒註冊 `local_hf`。
+- 沒有聲音輸出：確認 `_run_model_loop()` 有把 PCM16 mono bytes 放進 `_audio_out`，且 `sample_rate` 設成模型實際輸出音訊的 sample rate。
+- 延遲太高：避免在 async event loop 裡直接跑長時間 blocking 推論；可以用背景 thread/process 或本地 websocket server 包裝模型。
+- 音高或語速異常：檢查 `input_sample_rate` / `output_sample_rate` 是否和模型實際格式一致。
+
+## 建議架構
+
+如果 Hugging Face 模型載入很慢、推論很重，建議把模型做成獨立本地服務：
+
+```text
+Vox Symposium adapter
+  -> ws://127.0.0.1:9000/realtime
+      -> Hugging Face model process
+```
+
+這樣 Vox Symposium 只負責 LiveKit 音訊路由與 provider adapter，模型服務可以獨立管理 GPU、batching、重啟和 logging。

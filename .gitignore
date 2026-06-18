@@ -9,9 +9,5 @@ build/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-data/
-!data/scenarios/
-!data/scenarios/*.json
-!data/results/
-!data/results/*.json
-data/results/*-artifacts/
+data/*
+models/*
