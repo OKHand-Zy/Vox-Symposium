@@ -184,6 +184,8 @@ data/results/00000000-auto001-artifacts/
   dialogue-log.json
 ```
 
+`dialogue-log.json` 會在每個 `dialogue_turn` / `evaluation_answer` event 中同時保存 `text` 和 `audio`，讓一段回合文字能直接對應到同一筆紀錄的 WAV 檔。
+
 result 會保存：
 
 ```json
@@ -296,6 +298,32 @@ AGENT_SCHOLAR_PROVIDER=gemini
 ```bash
 vox-symposium
 ```
+
+預設會保存對話過程中模型輸出的語音與 transcript 文字：
+
+```text
+data/recordings/<run-id>/
+  conversation-log.json
+  agent-citizen-0001.wav
+  agent-scholar-0001.wav
+  ...
+```
+
+`conversation-log.json` 的每個 `model_output_turn` event 都會把文字和音檔放在同一筆紀錄中，方便後續用 JSON index 對應：
+
+```json
+{
+  "type": "model_output_turn",
+  "agent": "agent-scholar",
+  "text": "Transcript text from the provider.",
+  "audio": "data/recordings/20260618T120000Z-vox-symposium-both/agent-scholar-0001.wav",
+  "sample_rate": 24000,
+  "channels": 1,
+  "duration_seconds": 2.42
+}
+```
+
+可以用 `--record-dir` 或 `VOX_RECORD_DIR` 改變輸出位置；若只想跑即時轉發、不保存紀錄，可加 `--no-record`。
 
 也可以分開啟動：
 

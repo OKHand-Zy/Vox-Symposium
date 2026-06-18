@@ -6,6 +6,7 @@ import logging
 import time
 from array import array
 from dataclasses import dataclass
+from pathlib import Path
 
 from livekit import api, rtc
 
@@ -14,9 +15,11 @@ from vox_symposium.config import AgentConfig, Settings
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.models.gemini_live import GeminiLiveModel
 from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
+from vox_symposium.recording import ConversationRecorder, audio_event_fields, write_wav
 
 
 logger = logging.getLogger(__name__)
+RECORDING_TURN_IDLE_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,8 @@ class ProgrammableParticipant:
         settings: Settings,
         agent: AgentConfig,
         remote_identity: str,
+        recorder: ConversationRecorder | None = None,
+        recording_dir: Path | None = None,
     ) -> None:
         self.settings = settings
         self.agent = agent
@@ -39,6 +44,10 @@ class ProgrammableParticipant:
         self.room = rtc.Room()
         self.model = build_model(settings, agent)
         self.source = rtc.AudioSource(settings.publish_sample_rate, 1)
+        self.recorder = recorder
+        self.recording_dir = recording_dir
+        self._recording_turn_index = 0
+        self._recording_text_parts: list[str] = []
         self._tasks: set[asyncio.Task] = set()
         self._closed = asyncio.Event()
 
@@ -54,6 +63,7 @@ class ProgrammableParticipant:
         self._attach_existing_remote_tracks()
 
         self._tasks.add(asyncio.create_task(self._publish_model_audio(), name=f"{self.agent.identity}-publisher"))
+        self._tasks.add(asyncio.create_task(self._consume_model_text(), name=f"{self.agent.identity}-text"))
         await self._closed.wait()
 
     async def close(self) -> None:
@@ -61,6 +71,9 @@ class ProgrammableParticipant:
         for task in self._tasks:
             task.cancel()
         await self.model.close()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._flush_recorded_text_only()
         with contextlib.suppress(Exception):
             await self.room.disconnect()
 
@@ -146,37 +159,113 @@ class ProgrammableParticipant:
         chunk_count = 0
         byte_count = 0
         last_log_at = time.monotonic()
-        async for audio in self.model.receive_audio():
-            chunk_count += 1
-            byte_count += len(audio.data)
-            pcm48 = normalize_audio(
-                audio.data,
-                from_rate=audio.sample_rate,
-                to_rate=self.settings.publish_sample_rate,
-                channels=audio.channels,
-            )
-            for chunk in rechunk_pcm16(pcm48, self.settings.publish_sample_rate, self.settings.frame_ms):
-                frame = rtc.AudioFrame.create(
-                    self.settings.publish_sample_rate,
-                    1,
-                    int(self.settings.publish_sample_rate * self.settings.frame_ms / 1000),
-                )
+        turn_chunks: list[PcmAudio] = []
+        audio_iter = self.model.receive_audio().__aiter__()
+        pending_audio = asyncio.create_task(anext(audio_iter))
+        try:
+            while True:
+                recording_enabled = self.recorder is not None and self.recording_dir is not None
+                timeout = RECORDING_TURN_IDLE_SECONDS if recording_enabled and turn_chunks else None
+                done, _ = await asyncio.wait({pending_audio}, timeout=timeout)
+                if not done:
+                    self._save_recorded_audio_turn(turn_chunks)
+                    turn_chunks = []
+                    continue
+
                 try:
-                    frame.data[:] = chunk
-                except TypeError:
-                    samples = array("h")
-                    samples.frombytes(chunk)
-                    frame.data[:] = samples
-                await self.source.capture_frame(frame)
-            now = time.monotonic()
-            if now - last_log_at >= 5:
-                logger.info(
-                    "%s published model audio to LiveKit: %s chunks, %s bytes",
-                    self.agent.identity,
-                    chunk_count,
-                    byte_count,
-                )
-                last_log_at = now
+                    audio = pending_audio.result()
+                except StopAsyncIteration:
+                    break
+                pending_audio = asyncio.create_task(anext(audio_iter))
+
+                chunk_count += 1
+                byte_count += len(audio.data)
+                if recording_enabled:
+                    turn_chunks.append(audio)
+                await self._publish_audio_chunk(audio)
+                now = time.monotonic()
+                if now - last_log_at >= 5:
+                    logger.info(
+                        "%s published model audio to LiveKit: %s chunks, %s bytes",
+                        self.agent.identity,
+                        chunk_count,
+                        byte_count,
+                    )
+                    last_log_at = now
+        finally:
+            if not pending_audio.done():
+                pending_audio.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pending_audio
+            self._save_recorded_audio_turn(turn_chunks)
+
+    async def _publish_audio_chunk(self, audio: PcmAudio) -> None:
+        pcm48 = normalize_audio(
+            audio.data,
+            from_rate=audio.sample_rate,
+            to_rate=self.settings.publish_sample_rate,
+            channels=audio.channels,
+        )
+        for chunk in rechunk_pcm16(pcm48, self.settings.publish_sample_rate, self.settings.frame_ms):
+            frame = rtc.AudioFrame.create(
+                self.settings.publish_sample_rate,
+                1,
+                int(self.settings.publish_sample_rate * self.settings.frame_ms / 1000),
+            )
+            try:
+                frame.data[:] = chunk
+            except TypeError:
+                samples = array("h")
+                samples.frombytes(chunk)
+                frame.data[:] = samples
+            await self.source.capture_frame(frame)
+
+    async def _consume_model_text(self) -> None:
+        async for text in self.model.receive_text():
+            if not text:
+                continue
+            self._recording_text_parts.append(text)
+
+    def _save_recorded_audio_turn(self, chunks: list[PcmAudio]) -> None:
+        if not chunks or self.recorder is None or self.recording_dir is None:
+            return
+
+        first = chunks[0]
+        data = b"".join(chunk.data for chunk in chunks)
+        audio = PcmAudio(data=data, sample_rate=first.sample_rate, channels=first.channels)
+        self._recording_turn_index += 1
+        path = self.recording_dir / f"{self.agent.identity}-{self._recording_turn_index:04d}.wav"
+        recording = write_wav(path, audio)
+        text = self._take_recorded_text()
+        self.recorder.append(
+            {
+                "type": "model_output_turn",
+                "agent": self.agent.identity,
+                "text": text,
+                **audio_event_fields(recording),
+            }
+        )
+
+    def _flush_recorded_text_only(self) -> None:
+        if self.recorder is None:
+            self._recording_text_parts.clear()
+            return
+        text = self._take_recorded_text()
+        if not text:
+            return
+        self.recorder.append(
+            {
+                "type": "model_output_text",
+                "agent": self.agent.identity,
+                "text": text,
+                "audio": None,
+            }
+        )
+
+    def _take_recorded_text(self) -> str:
+        text = "".join(self._recording_text_parts).strip()
+        self._recording_text_parts.clear()
+        return text
 
 
 def build_model(settings: Settings, agent: AgentConfig) -> RealtimeAudioModel:

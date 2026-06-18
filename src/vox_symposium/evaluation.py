@@ -12,6 +12,7 @@ from typing import Any
 
 from vox_symposium.audio import PcmAudio, rechunk_pcm16
 from vox_symposium.models.base import RealtimeAudioModel
+from vox_symposium.recording import RecordedAudio, audio_event_fields, write_wav
 from vox_symposium.scenario import (
     build_evaluation_result,
     load_scenario,
@@ -83,6 +84,7 @@ async def run() -> None:
         scholar_turns = await _run_dialogue_turns(
             models,
             audio_queues,
+            text_queues,
             dialogue_log=dialogue_log,
             artifact_dir=artifact_dir,
             start_agent=next_agent,
@@ -118,14 +120,14 @@ async def run() -> None:
             max_seconds=args.max_utterance_seconds,
         )
         answer_audio = Path(args.answer_audio) if args.answer_audio else artifact_dir / "scholar-answer.wav"
-        _write_wav(answer_audio, answer.audio)
+        answer_recording = _write_wav(answer_audio, answer.audio)
         answer_text = await _collect_text_after_audio(text_queues["scholar"])
         dialogue_log["events"].append(
             {
                 "type": "evaluation_answer",
                 "agent": "scholar",
-                "audio": str(answer_audio),
                 "text": answer_text,
+                **audio_event_fields(answer_recording),
             }
         )
 
@@ -195,6 +197,7 @@ async def _play_opening(
 async def _run_dialogue_turns(
     models: dict[str, RealtimeAudioModel],
     audio_queues: dict[str, asyncio.Queue[PcmAudio | None]],
+    text_queues: dict[str, asyncio.Queue[str | None]],
     *,
     dialogue_log: dict[str, Any],
     artifact_dir: Path,
@@ -220,13 +223,15 @@ async def _run_dialogue_turns(
         if current_agent == "scholar":
             scholar_turns += 1
         utterance_path = artifact_dir / f"dialogue-{event_index:02d}-{current_agent}.wav"
-        _write_wav(utterance_path, utterance.audio)
+        recording = _write_wav(utterance_path, utterance.audio)
+        text = await _collect_text_after_audio(text_queues[current_agent])
         dialogue_log["events"].append(
             {
                 "type": "dialogue_turn",
                 "agent": current_agent,
                 "scholar_turns": scholar_turns,
-                "audio": str(utterance_path),
+                "text": text,
+                **audio_event_fields(recording),
             }
         )
         print(f"Captured {current_agent} turn {event_index}; scholar_turns={scholar_turns}")
@@ -235,6 +240,7 @@ async def _run_dialogue_turns(
             break
 
         receiver = _other_agent(current_agent)
+        _drain_queue(text_queues[receiver])
         await _send_audio(utterance.audio, models[receiver], frame_ms=frame_ms, audio_speed=audio_speed)
         current_agent = receiver
 
@@ -469,13 +475,8 @@ def _read_wav(path: Path) -> PcmAudio:
     return PcmAudio(data=data, sample_rate=sample_rate, channels=channels)
 
 
-def _write_wav(path: Path, audio: PcmAudio) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(audio.channels)
-        wav.setsampwidth(2)
-        wav.setframerate(audio.sample_rate)
-        wav.writeframes(audio.data)
+def _write_wav(path: Path, audio: PcmAudio) -> RecordedAudio:
+    return write_wav(path, audio)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
