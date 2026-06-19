@@ -29,6 +29,30 @@ Agent-Scholar model output -> Agent-Scholar LiveKit audio track -> Agent-Citizen
 
 Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime 或 Gemini Live。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions。
 
+## 重要資料位置
+
+從 [OmniCharacter-plus](https://huggingface.co/datasets/haonanzhang/OmniCharacter-plus) 下載的資料放在專案根目錄的 `data/` 下。建議使用以下位置：
+
+| 資料 | 位置 | 說明 |
+| --- | --- | --- |
+| 資料集 JSON | `data/<dataset>.json` | 例如 `data/two_test.json` |
+| 劇情對話音檔 | `data/<audio_dir>/` | 例如 `data/test/instruct_00000000_9.wav`；轉換時用 `--audio-dir data/test` 指定 |
+| 測驗題音檔 | `data/question_audio/<dataset>/` | 例如 `data/question_audio/two_test/question_00000000.wav`；`<dataset>` 必須和 JSON 檔名一致 |
+| 轉換後的 scenario | `data/scenarios/` | 存放評測用的 scenario JSON |
+| 評測結果與錄音 | `data/results/` | 存放 result JSON 與 `*-artifacts/` |
+
+```text
+data/
+├── two_test.json
+├── test/
+│   └── instruct_00000000_9.wav
+├── question_audio/
+│   └── two_test/
+│       └── question_00000000.wav
+├── scenarios/
+└── results/
+```
+
 ## OmniCharacter-plus 快速使用
 
 `OmniCharacter-plus` 分支新增資料集驅動的雙語音代理評測流程。它會把 `data/two_test.json` 轉成 scenario，讓兩個 realtime audio model 延續劇情對話，完成指定回合數後播放測驗題音訊給被測模型，最後保存回答、音檔與是否答對。
