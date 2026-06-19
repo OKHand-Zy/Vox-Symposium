@@ -31,6 +31,7 @@ def load_scenario(
     scenario_id: str | None = None,
     scenario_index: int | None = None,
     audio_dir: str | Path | None = None,
+    question_audio_dir: str | Path | None = None,
     dialogue_turns: int = 5,
 ) -> LoadedScenario:
     scenarios = load_scenarios(
@@ -38,6 +39,7 @@ def load_scenario(
         scenario_id=scenario_id,
         scenario_index=scenario_index,
         audio_dir=audio_dir,
+        question_audio_dir=question_audio_dir,
         dialogue_turns=dialogue_turns,
     )
     if len(scenarios) != 1:
@@ -51,6 +53,7 @@ def load_scenarios(
     scenario_id: str | None = None,
     scenario_index: int | None = None,
     audio_dir: str | Path | None = None,
+    question_audio_dir: str | Path | None = None,
     dialogue_turns: int = 5,
 ) -> list[dict[str, Any]]:
     source_path = Path(path)
@@ -59,8 +62,14 @@ def load_scenarios(
 
     records = payload if isinstance(payload, list) else [payload]
     selected = _select_records(records, scenario_id=scenario_id, scenario_index=scenario_index)
+    question_audio_root = _question_audio_root(source_path, question_audio_dir)
     return [
-        normalize_scenario(record, audio_dir=audio_dir, dialogue_turns=dialogue_turns)
+        normalize_scenario(
+            record,
+            audio_dir=audio_dir,
+            question_audio_dir=question_audio_root,
+            dialogue_turns=dialogue_turns,
+        )
         for record in selected
     ]
 
@@ -69,6 +78,7 @@ def normalize_scenario(
     record: dict[str, Any],
     *,
     audio_dir: str | Path | None = None,
+    question_audio_dir: str | Path | None = None,
     dialogue_turns: int = 5,
 ) -> dict[str, Any]:
     if _is_normalized(record):
@@ -125,7 +135,7 @@ def normalize_scenario(
             "question": record.get("question"),
             "choices": record.get("multichoice") or [],
             "correct_answer": record.get("correct_answer"),
-            "question_audio": None,
+            "question_audio": _question_audio_path(scenario_id, question_audio_dir),
         },
         "assets": {
             "speech": _audio_paths(record.get("speech") or [], audio_dir=audio_dir),
@@ -280,6 +290,10 @@ def main() -> None:
     parser.add_argument("--id", dest="scenario_id", help="Convert a single record by id.")
     parser.add_argument("--index", dest="scenario_index", type=int, help="Convert a single record by zero-based index.")
     parser.add_argument("--audio-dir", help="Directory containing speech wav files.")
+    parser.add_argument(
+        "--question-audio-dir",
+        help="Directory containing question_{id}.wav files. Defaults to data/question_audio/<dataset>.",
+    )
     parser.add_argument("--dialogue-turns", type=int, default=5, help="Dialogue turns before evaluation.")
     args = parser.parse_args()
 
@@ -288,6 +302,7 @@ def main() -> None:
         scenario_id=args.scenario_id,
         scenario_index=args.scenario_index,
         audio_dir=args.audio_dir,
+        question_audio_dir=args.question_audio_dir,
         dialogue_turns=args.dialogue_turns,
     )
     write_scenarios(args.output, scenarios)
@@ -392,6 +407,22 @@ def _audio_paths(speech: list[str], *, audio_dir: str | Path | None) -> list[str
         return list(speech)
     root = Path(audio_dir)
     return [str(root / filename) for filename in speech]
+
+
+def _question_audio_root(source_path: Path, question_audio_dir: str | Path | None) -> Path | None:
+    if question_audio_dir is not None:
+        return Path(question_audio_dir)
+    conventional_root = source_path.parent / "question_audio" / source_path.stem
+    return conventional_root if conventional_root.is_dir() else None
+
+
+def _question_audio_path(scenario_id: str, question_audio_dir: str | Path | None) -> str | None:
+    if question_audio_dir is None:
+        return None
+    path = Path(question_audio_dir) / f"question_{scenario_id}.wav"
+    if not path.is_file():
+        raise RuntimeError(f"Question audio does not exist: {path}")
+    return str(path)
 
 
 def _is_normalized(record: dict[str, Any]) -> bool:

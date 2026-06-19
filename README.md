@@ -68,6 +68,10 @@ GEMINI_API_KEY=your-gemini-api-key
 vox-symposium-scenario data/two_test.json data/scenarios/two_test.normalized.json --audio-dir data/test
 ```
 
+轉換器會依輸入檔名自動尋找 `data/question_audio/two_test/question_{id}.wav`，並寫入
+`evaluation.question_audio`。如果題目音檔放在其他位置，使用
+`--question-audio-dir /path/to/question_audio` 指定資料夾。
+
 只轉單一筆：
 
 ```bash
@@ -91,7 +95,7 @@ vox-symposium-scenario data/two_test.json data/scenarios/00000000.json --id 0000
     "question": "Based on the dialogue...",
     "choices": ["A. ...", "B. ...", "C. ...", "D. ..."],
     "correct_answer": "C",
-    "question_audio": "question_00000000.mp3"
+    "question_audio": "data/question_audio/two_test/question_00000000.wav"
   }
 }
 ```
