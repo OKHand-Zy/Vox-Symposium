@@ -14,6 +14,7 @@ from vox_symposium.audio import PcmAudio, normalize_audio, rechunk_pcm16
 from vox_symposium.config import AgentConfig, Settings
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.models.gemini_live import GeminiLiveModel
+from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
 from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
 from vox_symposium.recording import ConversationRecorder, audio_event_fields, write_wav
 
@@ -293,5 +294,18 @@ def build_model(settings: Settings, agent: AgentConfig) -> RealtimeAudioModel:
             credentials_file=settings.gemini_credentials_file,
             model=settings.gemini_model,
             instructions=agent.instructions,
+        )
+    if provider == "minicpm":
+        if settings.minicpm_realtime_url is None:
+            raise RuntimeError(
+                "MINICPM_REALTIME_URL is required when a participant uses provider=minicpm"
+            )
+        return MiniCPMRealtimeModel(
+            url=settings.minicpm_realtime_url,
+            api_key=settings.minicpm_api_key,
+            instructions=agent.instructions,
+            length_penalty=settings.minicpm_length_penalty,
+            input_chunk_ms=settings.minicpm_input_chunk_ms,
+            queue_timeout=settings.minicpm_queue_timeout,
         )
     raise RuntimeError(f"Unsupported provider for {agent.identity}: {agent.provider}")

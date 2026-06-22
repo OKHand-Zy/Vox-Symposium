@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from array import array
 from dataclasses import dataclass
 
@@ -71,6 +72,32 @@ def normalize_audio(data: bytes, *, from_rate: int, to_rate: int, channels: int)
     return resample_pcm16_mono(mono, from_rate, to_rate)
 
 
+def pcm16_to_float32(data: bytes) -> bytes:
+    """Convert little-endian signed PCM16 bytes to little-endian float32 PCM."""
+    samples = _pcm16_array(data)
+    floats = array("f", (sample / 32768.0 for sample in samples))
+    if _is_big_endian(floats):
+        floats.byteswap()
+    return floats.tobytes()
+
+
+def float32_to_pcm16(data: bytes) -> bytes:
+    """Convert little-endian float32 PCM bytes to clipped little-endian PCM16."""
+    usable = len(data) - (len(data) % 4)
+    samples = array("f")
+    samples.frombytes(data[:usable])
+    if _is_big_endian(samples):
+        samples.byteswap()
+
+    pcm = array("h")
+    for sample in samples:
+        if sample != sample:  # NaN
+            sample = 0.0
+        value = int(round(sample * 32768.0))
+        pcm.append(_clamp_pcm16(value))
+    return _array_to_le_bytes(pcm)
+
+
 def _pcm16_array(data: bytes) -> array:
     if len(data) % PCM_SAMPLE_WIDTH_BYTES:
         data = data[:-1]
@@ -90,9 +117,8 @@ def _array_to_le_bytes(samples: array) -> bytes:
     return out.tobytes()
 
 
-def _is_big_endian(samples: array) -> bool:
-    probe = array(samples.typecode, [1])
-    return probe.tobytes() == b"\x00\x01"
+def _is_big_endian(_samples: array) -> bool:
+    return sys.byteorder == "big"
 
 
 def _clamp_pcm16(value: int) -> int:

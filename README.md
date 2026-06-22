@@ -27,7 +27,7 @@ Agent-Scholar model output -> Agent-Scholar LiveKit audio track -> Agent-Citizen
 - Agent-Citizen：代表人類使用者，用來模擬一般人對 Voice Agent 的提問、追問與互動。
 - Agent-Scholar：代表被測試的 Voice Agent，也就是你要觀察、驗證與調整的目標代理。
 
-Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime 或 Gemini Live。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions。
+Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime、Gemini Live 或自架的 MiniCPM-o 4.5 Audio Full-Duplex Gateway。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions。
 
 ## 重要資料位置
 
@@ -301,6 +301,7 @@ pip install -e .
 - Azure OpenAI：`AZURE_OPENAI_API_KEY`、`AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_DEPLOYMENT_NAME`
 - Gemini 使用 AI Studio 時：`GEMINI_API_KEY`
 - Gemini 使用 Vertex AI 時：`GOOGLE_CLOUD_PROJECT`、`GOOGLE_APPLICATION_CREDENTIALS`
+- MiniCPM-o 4.5：`MINICPM_REALTIME_URL`
 
 Gemini 預設使用 AI Studio，因此需要 `GEMINI_API_KEY`。若要使用 Vertex AI，改設 `GEMINI_BACKEND=vertex`，並提供 `GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION` 與指向 service account JSON 的 `GOOGLE_APPLICATION_CREDENTIALS`；此時不需要 `GEMINI_API_KEY`。
 
@@ -320,6 +321,7 @@ AGENT_SCHOLAR_INSTRUCTIONS=You are Agent-Scholar, the voice agent under test. Ke
 
 - `openai`：使用 OpenAI Realtime。
 - `gemini`：使用 Gemini Live。
+- `minicpm`：使用自架 MiniCPM-o 4.5 Audio Full-Duplex Gateway。
 
 例如兩邊都使用 OpenAI：
 
@@ -356,6 +358,26 @@ OPENAI_REALTIME_VOICE=marin
 API 時才加上 `AZURE_OPENAI_API_VERSION=2025-04-01-preview`；程式會改用 preview
 endpoint（`/openai/realtime`）。Azure 模式不需要 `OPENAI_API_KEY`，且 deployment
 名稱取代 `OPENAI_REALTIME_MODEL`。
+
+MiniCPM-o 4.5 必須先部署官方 Gateway、Worker 與 Backend，Vox Symposium 只連公開
+Gateway，不直接連 Worker 或 Backend。以下範例只將被測的 Scholar 換成 MiniCPM：
+
+```env
+AGENT_CITIZEN_PROVIDER=gemini
+AGENT_SCHOLAR_PROVIDER=minicpm
+MINICPM_REALTIME_URL=ws://127.0.0.1:8006/v1/realtime?mode=audio
+MINICPM_LENGTH_PENALTY=1.1
+MINICPM_INPUT_CHUNK_MS=1000
+MINICPM_QUEUE_TIMEOUT=300
+```
+
+正式環境應使用 `wss://`。若 reverse proxy 驗證 Bearer token，再設定
+`MINICPM_API_KEY`。adapter 會持續轉送 LiveKit 音訊，不使用 client-side VAD
+切斷靜音，讓模型保留完整的 full-duplex listen/speak 判斷。
+自動 evaluation 需要固定交替回合，因此只在 evaluation runner 中額外要求 MiniCPM
+於對方說完後輸出語音，並追加靜音 input chunk 讓模型繼續進行 listen/speak
+決策。模型說話期間會持續以即時速度送入靜音，直到模型回到 `listen`，避免
+full-duplex 生成因沒有後續 input 而中途停止；一般 LiveKit participant 不會加入這項限制。
 
 ## 啟動
 
@@ -448,6 +470,13 @@ GOOGLE_CLOUD_LOCATION=us-central1
 GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
 ```
 
+如果其中一個角色使用 MiniCPM-o 4.5，加入：
+
+```env
+AGENT_SCHOLAR_PROVIDER=minicpm
+MINICPM_REALTIME_URL=ws://127.0.0.1:8006/v1/realtime?mode=audio
+```
+
 啟動測試：
 
 ```bash
@@ -472,6 +501,7 @@ LIVEKIT_ROOM=test-room
 - LiveKit 發布音訊時使用 mono 48 kHz PCM frame。
 - OpenAI Realtime input 會被 resample 成 mono 24 kHz PCM。
 - Gemini Live input 會被 resample 成 mono 16 kHz PCM。
+- MiniCPM input 會轉成 mono 16 kHz float32 PCM；output 24 kHz float32 PCM 會轉回 PCM16。
 - Model output 預期為 mono 24 kHz PCM，發布回 LiveKit 前會 resample 成 LiveKit publish sample rate。
 
 ## 擴充其他模型
@@ -479,3 +509,6 @@ LIVEKIT_ROOM=test-room
 Provider adapter 放在 `src/vox_symposium/models/`。之後如果要改接 self-hosted full-duplex model，只要實作 `RealtimeAudioModel` 介面，並在 `build_model()` 中註冊新的 provider。
 
 如果要使用自己的本地 Hugging Face 即時語音模型，請看 [doc/local-hf-realtime-model.md](doc/local-hf-realtime-model.md)。
+
+MiniCPM-o 4.5 的完整非 Docker 部署、TorchCodec 安裝、三程序啟動與故障排除請看
+[doc/minicpm-o-4_5-deployment.md](doc/minicpm-o-4_5-deployment.md)。

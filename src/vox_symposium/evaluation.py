@@ -371,6 +371,18 @@ def _build_model(agent: str, instructions: str) -> RealtimeAudioModel:
             instructions=instructions,
             manual_activity=True,
         )
+    if provider == "minicpm":
+        from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
+
+        return MiniCPMRealtimeModel(
+            url=_required("MINICPM_REALTIME_URL"),
+            api_key=os.getenv("MINICPM_API_KEY") or None,
+            instructions=instructions,
+            length_penalty=_float_env("MINICPM_LENGTH_PENALTY", 1.1),
+            input_chunk_ms=_int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
+            queue_timeout=_float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
+            evaluation_turn_taking=True,
+        )
     raise RuntimeError(f"Unsupported provider for {agent}: {provider}")
 
 
@@ -514,6 +526,26 @@ def _other_agent(agent: str) -> str:
 
 def _env(primary: str, legacy: str, *, default: str) -> str:
     return os.getenv(primary) or os.getenv(legacy) or default
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
 
 
 def _required(name: str) -> str:

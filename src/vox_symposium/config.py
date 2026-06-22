@@ -40,6 +40,11 @@ class Settings:
     gemini_vertex_location: str | None
     gemini_credentials_file: str | None
     gemini_model: str
+    minicpm_realtime_url: str | None
+    minicpm_api_key: str | None
+    minicpm_length_penalty: float
+    minicpm_input_chunk_ms: int
+    minicpm_queue_timeout: float
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,11 @@ def load_settings() -> Settings:
         else None
     )
     gemini_auth = load_gemini_auth() if _uses_provider("gemini", agent_citizen, agent_scholar) else None
+    minicpm_url = (
+        _required("MINICPM_REALTIME_URL")
+        if _uses_provider("minicpm", agent_citizen, agent_scholar)
+        else os.getenv("MINICPM_REALTIME_URL")
+    )
 
     return Settings(
         livekit_url=_required("LIVEKIT_URL"),
@@ -115,6 +125,11 @@ def load_settings() -> Settings:
         gemini_vertex_location=gemini_auth.location if gemini_auth else None,
         gemini_credentials_file=gemini_auth.credentials_file if gemini_auth else None,
         gemini_model=gemini_live_model(gemini_auth.backend if gemini_auth else "ai_studio"),
+        minicpm_realtime_url=minicpm_url,
+        minicpm_api_key=os.getenv("MINICPM_API_KEY") or None,
+        minicpm_length_penalty=_float_env("MINICPM_LENGTH_PENALTY", 1.1),
+        minicpm_input_chunk_ms=_int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
+        minicpm_queue_timeout=_float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
     )
 
 
@@ -204,9 +219,10 @@ def _uses_provider(provider: str, *agents: AgentConfig) -> bool:
 
 
 def _validate_provider(agent: AgentConfig) -> None:
-    if agent.provider not in {"openai", "gemini"}:
+    if agent.provider not in {"openai", "gemini", "minicpm"}:
         raise RuntimeError(
-            f"{agent.identity} provider must be 'openai' or 'gemini', got {agent.provider!r}"
+            f"{agent.identity} provider must be 'openai', 'gemini', or 'minicpm', "
+            f"got {agent.provider!r}"
         )
 
 
@@ -225,6 +241,16 @@ def _int_env(name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
 
 
 def _optional_int_env(name: str) -> int | None:
