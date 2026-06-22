@@ -337,15 +337,21 @@ def _build_model(agent: str, instructions: str) -> RealtimeAudioModel:
     provider = _env(f"AGENT_{agent.upper()}_PROVIDER", f"AGENT_{'A' if agent == 'citizen' else 'B'}_PROVIDER", default=_default_provider(agent)).lower()
     if provider == "openai":
         try:
+            from vox_symposium.config import load_openai_auth
             from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
         except ModuleNotFoundError as exc:
             raise RuntimeError("OpenAI provider dependencies are missing. Run `pip install -r requirements.txt`.") from exc
 
+        auth = load_openai_auth()
         return OpenAIRealtimeModel(
-            api_key=_required("OPENAI_API_KEY"),
-            model=os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2"),
+            api_key=auth.api_key,
+            backend=auth.backend,
+            endpoint=auth.endpoint,
+            api_version=auth.api_version,
+            model=auth.model,
             voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
             instructions=instructions,
+            manual_activity=True,
         )
     if provider == "gemini":
         try:

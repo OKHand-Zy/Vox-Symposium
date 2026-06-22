@@ -275,7 +275,7 @@ vox-symposium-scenario save-result \
 
 **常見問題**
 
-- `Missing required environment variable: OPENAI_API_KEY`：evaluation runner 沒讀到 `.env` 裡的 provider 設定，或沒有設定 `AGENT_CITIZEN_PROVIDER=gemini` / `AGENT_SCHOLAR_PROVIDER=gemini`。確認 `.env` 在專案根目錄，並重新執行。
+- `Missing required environment variable: OPENAI_API_KEY`：evaluation runner 沒讀到 `.env` 裡的 provider/backend 設定。若使用 Azure，確認已設定 `OPENAI_BACKEND=azure`；若不使用 OpenAI，確認角色 provider 已改為 `gemini`。確認 `.env` 在專案根目錄，並重新執行。
 - `Both GOOGLE_API_KEY and GEMINI_API_KEY are set`：Google SDK 提示會使用 `GOOGLE_API_KEY`。這不是錯誤；若不想使用它，請 unset `GOOGLE_API_KEY`。
 - `Question audio does not exist`：確認 `evaluation.question_audio` 指向的檔案存在。若 JSON 寫 `"question_00000000.mp3"`，檔案可放在 `data/question/question_00000000.mp3`。
 - `ConnectionClosedError` 或 keepalive timeout：先用 `--dialogue-turns 2` 做 smoke test；完整評測可顯式加 `--audio-speed 8` 或 `--audio-speed 16`，並確保角色回覆不要太長。
@@ -297,7 +297,8 @@ pip install -e .
 - `LIVEKIT_URL`
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
-- provider 使用 OpenAI 時：`OPENAI_API_KEY`
+- OpenAI 官方 API：`OPENAI_API_KEY`
+- Azure OpenAI：`AZURE_OPENAI_API_KEY`、`AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_DEPLOYMENT_NAME`
 - Gemini 使用 AI Studio 時：`GEMINI_API_KEY`
 - Gemini 使用 Vertex AI 時：`GOOGLE_CLOUD_PROJECT`、`GOOGLE_APPLICATION_CREDENTIALS`
 
@@ -334,7 +335,27 @@ AGENT_CITIZEN_PROVIDER=gemini
 AGENT_SCHOLAR_PROVIDER=gemini
 ```
 
-程式只會要求實際使用到的 provider 認證。如果兩個角色都使用 OpenAI，就只需要 `OPENAI_API_KEY`；Gemini 則依 `GEMINI_BACKEND` 要求 AI Studio API key 或 Vertex service account JSON。
+程式只會要求實際使用到的 provider 認證。OpenAI 官方 backend 使用
+`OPENAI_API_KEY`；Azure backend 使用 Azure endpoint、deployment 與 API key。Gemini
+則依 `GEMINI_BACKEND` 要求 AI Studio API key 或 Vertex service account JSON。
+
+OpenAI 預設使用官方 API。若要改用 Azure OpenAI Realtime，角色仍設為
+`provider=openai`，並設定共用 backend：
+
+```env
+AGENT_CITIZEN_PROVIDER=openai
+AGENT_SCHOLAR_PROVIDER=openai
+OPENAI_BACKEND=azure
+AZURE_OPENAI_API_KEY=your-azure-openai-api-key
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_OPENAI_DEPLOYMENT_NAME=your-gpt-realtime-deployment
+OPENAI_REALTIME_VOICE=marin
+```
+
+預設使用 Azure GA endpoint（`/openai/v1/realtime`）。只有 deployment 使用 preview
+API 時才加上 `AZURE_OPENAI_API_VERSION=2025-04-01-preview`；程式會改用 preview
+endpoint（`/openai/realtime`）。Azure 模式不需要 `OPENAI_API_KEY`，且 deployment
+名稱取代 `OPENAI_REALTIME_MODEL`。
 
 ## 啟動
 
@@ -401,6 +422,15 @@ LIVEKIT_API_SECRET=your-livekit-api-secret
 AGENT_CITIZEN_PROVIDER=openai
 AGENT_SCHOLAR_PROVIDER=openai
 OPENAI_API_KEY=your-openai-api-key
+```
+
+改用 Azure OpenAI 時，將上段的 `OPENAI_API_KEY` 換成：
+
+```env
+OPENAI_BACKEND=azure
+AZURE_OPENAI_API_KEY=your-azure-openai-api-key
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_OPENAI_DEPLOYMENT_NAME=your-gpt-realtime-deployment
 ```
 
 如果其中一個角色使用 Gemini，才需要加入：

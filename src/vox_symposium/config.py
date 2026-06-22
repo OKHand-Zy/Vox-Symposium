@@ -29,6 +29,9 @@ class Settings:
     agent_citizen: AgentConfig
     agent_scholar: AgentConfig
     openai_api_key: str | None
+    openai_backend: str
+    openai_endpoint: str | None
+    openai_api_version: str | None
     openai_model: str
     openai_voice: str
     gemini_api_key: str | None
@@ -46,6 +49,15 @@ class GeminiAuthConfig:
     project: str | None = None
     location: str | None = None
     credentials_file: str | None = None
+
+
+@dataclass(frozen=True)
+class OpenAIAuthConfig:
+    backend: str
+    api_key: str
+    model: str
+    endpoint: str | None = None
+    api_version: str | None = None
 
 
 def load_settings() -> Settings:
@@ -71,6 +83,11 @@ def load_settings() -> Settings:
     agent_citizen, agent_scholar = _apply_scenario_instructions(agent_citizen, agent_scholar)
     _validate_provider(agent_citizen)
     _validate_provider(agent_scholar)
+    openai_auth = (
+        load_openai_auth()
+        if _uses_provider("openai", agent_citizen, agent_scholar)
+        else None
+    )
     gemini_auth = load_gemini_auth() if _uses_provider("gemini", agent_citizen, agent_scholar) else None
 
     return Settings(
@@ -82,8 +99,15 @@ def load_settings() -> Settings:
         frame_ms=_int_env("LIVEKIT_FRAME_MS", 20),
         agent_citizen=agent_citizen,
         agent_scholar=agent_scholar,
-        openai_api_key=_required("OPENAI_API_KEY") if _uses_provider("openai", agent_citizen, agent_scholar) else None,
-        openai_model=os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2"),
+        openai_api_key=openai_auth.api_key if openai_auth else None,
+        openai_backend=openai_auth.backend if openai_auth else "openai",
+        openai_endpoint=openai_auth.endpoint if openai_auth else None,
+        openai_api_version=openai_auth.api_version if openai_auth else None,
+        openai_model=(
+            openai_auth.model
+            if openai_auth
+            else os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
+        ),
         openai_voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
         gemini_api_key=gemini_auth.api_key if gemini_auth else None,
         gemini_backend=gemini_auth.backend if gemini_auth else "ai_studio",
@@ -91,6 +115,28 @@ def load_settings() -> Settings:
         gemini_vertex_location=gemini_auth.location if gemini_auth else None,
         gemini_credentials_file=gemini_auth.credentials_file if gemini_auth else None,
         gemini_model=gemini_live_model(gemini_auth.backend if gemini_auth else "ai_studio"),
+    )
+
+
+def load_openai_auth() -> OpenAIAuthConfig:
+    backend = os.getenv("OPENAI_BACKEND", "openai").strip().lower().replace("-", "_")
+    if backend in {"openai", "official"}:
+        return OpenAIAuthConfig(
+            backend="openai",
+            api_key=_required("OPENAI_API_KEY"),
+            model=os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2"),
+        )
+    if backend not in {"azure", "azure_openai"}:
+        raise RuntimeError(
+            f"OPENAI_BACKEND must be 'openai' or 'azure', got {backend!r}"
+        )
+
+    return OpenAIAuthConfig(
+        backend="azure",
+        api_key=_required("AZURE_OPENAI_API_KEY"),
+        endpoint=_required("AZURE_OPENAI_ENDPOINT"),
+        model=_required("AZURE_OPENAI_DEPLOYMENT_NAME"),
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION") or None,
     )
 
 

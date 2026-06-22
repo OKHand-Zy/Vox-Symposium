@@ -272,9 +272,14 @@ def build_model(settings: Settings, agent: AgentConfig) -> RealtimeAudioModel:
     provider = agent.provider.lower()
     if provider == "openai":
         if settings.openai_api_key is None:
-            raise RuntimeError("OPENAI_API_KEY is required when a participant uses provider=openai")
+            raise RuntimeError(
+                "OpenAI credentials are required when a participant uses provider=openai"
+            )
         return OpenAIRealtimeModel(
             api_key=settings.openai_api_key,
+            backend=settings.openai_backend,
+            endpoint=settings.openai_endpoint,
+            api_version=settings.openai_api_version,
             model=settings.openai_model,
             voice=settings.openai_voice,
             instructions=agent.instructions,

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 from collections.abc import AsyncIterator
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from websockets.asyncio.client import ClientConnection, connect
 
@@ -22,53 +23,106 @@ class OpenAIRealtimeModel(RealtimeAudioModel):
         model: str,
         voice: str,
         instructions: str,
+        backend: str = "openai",
+        endpoint: str | None = None,
+        api_version: str | None = None,
+        manual_activity: bool = False,
     ) -> None:
         self.api_key = api_key
         self.model = model
         self.voice = voice
         self.instructions = instructions
+        self.backend = backend
+        self.endpoint = endpoint
+        self.api_version = api_version
+        self.manual_activity = manual_activity
         self._ws: ClientConnection | None = None
         self._audio_out: asyncio.Queue[PcmAudio | None] = asyncio.Queue(maxsize=100)
         self._text_out: asyncio.Queue[str | None] = asyncio.Queue(maxsize=100)
         self._reader_task: asyncio.Task[None] | None = None
 
     async def connect(self) -> None:
-        url = f"wss://api.openai.com/v1/realtime?model={self.model}"
+        url, headers = self._connection_config()
         self._ws = await connect(
             url,
-            additional_headers={"Authorization": f"Bearer {self.api_key}"},
+            additional_headers=headers,
             max_size=None,
         )
+        session = {
+            "type": "realtime",
+            "instructions": self.instructions,
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": self.input_sample_rate,
+                    },
+                    "turn_detection": (
+                        None
+                        if self.manual_activity
+                        else {
+                            "type": "semantic_vad",
+                        }
+                    ),
+                },
+                "output": {
+                    "voice": self.voice,
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": self.output_sample_rate,
+                    },
+                }
+            },
+        }
+        # Azure selects the deployment in the URL and doesn't accept a deployment
+        # alias as session.model. The official endpoint keeps the existing behavior.
+        if self.backend == "openai":
+            session["model"] = self.model
         await self._send(
             {
                 "type": "session.update",
-                "session": {
-                    "type": "realtime",
-                    "model": self.model,
-                    "instructions": self.instructions,
-                    "output_modalities": ["audio"],
-                    "audio": {
-                        "input": {
-                            "format": {
-                                "type": "audio/pcm",
-                                "rate": self.input_sample_rate,
-                            },
-                            "turn_detection": {
-                                "type": "semantic_vad",
-                            },
-                        },
-                        "output": {
-                            "voice": self.voice,
-                            "format": {
-                                "type": "audio/pcm",
-                                "rate": self.output_sample_rate,
-                            },
-                        }
-                    },
-                },
+                "session": session,
             }
         )
         self._reader_task = asyncio.create_task(self._read_loop(), name=f"openai-{self.model}-reader")
+
+    async def end_audio_turn(self) -> None:
+        if not self.manual_activity:
+            return
+        await self._send({"type": "input_audio_buffer.commit"})
+        await self._send({"type": "response.create"})
+
+    def _connection_config(self) -> tuple[str, dict[str, str]]:
+        if self.backend == "openai":
+            query = urlencode({"model": self.model})
+            return (
+                f"wss://api.openai.com/v1/realtime?{query}",
+                {"Authorization": f"Bearer {self.api_key}"},
+            )
+        if self.backend != "azure":
+            raise RuntimeError(f"Unsupported OpenAI backend: {self.backend}")
+        if not self.endpoint:
+            raise RuntimeError("AZURE_OPENAI_ENDPOINT is required for the Azure OpenAI backend")
+
+        parsed = urlsplit(self.endpoint.rstrip("/"))
+        if parsed.scheme not in {"https", "wss"} or not parsed.netloc:
+            raise RuntimeError(
+                "AZURE_OPENAI_ENDPOINT must be an HTTPS URL, for example "
+                "https://your-resource.openai.azure.com"
+            )
+        if parsed.query or parsed.fragment:
+            raise RuntimeError("AZURE_OPENAI_ENDPOINT must not contain a query string or fragment")
+        scheme = "wss"
+        base_path = parsed.path.rstrip("/")
+        if self.api_version:
+            path = f"{base_path}/openai/realtime"
+            query = urlencode({"api-version": self.api_version, "deployment": self.model})
+        else:
+            path = f"{base_path}/openai/v1/realtime"
+            query = urlencode({"model": self.model})
+        url = urlunsplit((scheme, parsed.netloc, path, query, ""))
+        return url, {"api-key": self.api_key}
 
     async def send_audio(self, audio: PcmAudio) -> None:
         pcm = normalize_audio(
