@@ -350,12 +350,18 @@ def _build_model(agent: str, instructions: str) -> RealtimeAudioModel:
     if provider == "gemini":
         try:
             from vox_symposium.models.gemini_live import GeminiLiveModel
+            from vox_symposium.config import gemini_live_model, load_gemini_auth
         except ModuleNotFoundError as exc:
             raise RuntimeError("Gemini provider dependencies are missing. Run `pip install -r requirements.txt`.") from exc
 
+        auth = load_gemini_auth()
         return GeminiLiveModel(
-            api_key=_required("GEMINI_API_KEY"),
-            model=os.getenv("GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview"),
+            api_key=auth.api_key,
+            backend=auth.backend,
+            vertex_project=auth.project,
+            vertex_location=auth.location,
+            credentials_file=auth.credentials_file,
+            model=gemini_live_model(auth.backend),
             instructions=instructions,
             manual_activity=True,
         )

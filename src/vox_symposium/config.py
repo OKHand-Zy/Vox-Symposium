@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
@@ -31,7 +32,20 @@ class Settings:
     openai_model: str
     openai_voice: str
     gemini_api_key: str | None
+    gemini_backend: str
+    gemini_vertex_project: str | None
+    gemini_vertex_location: str | None
+    gemini_credentials_file: str | None
     gemini_model: str
+
+
+@dataclass(frozen=True)
+class GeminiAuthConfig:
+    backend: str
+    api_key: str | None = None
+    project: str | None = None
+    location: str | None = None
+    credentials_file: str | None = None
 
 
 def load_settings() -> Settings:
@@ -57,6 +71,7 @@ def load_settings() -> Settings:
     agent_citizen, agent_scholar = _apply_scenario_instructions(agent_citizen, agent_scholar)
     _validate_provider(agent_citizen)
     _validate_provider(agent_scholar)
+    gemini_auth = load_gemini_auth() if _uses_provider("gemini", agent_citizen, agent_scholar) else None
 
     return Settings(
         livekit_url=_required("LIVEKIT_URL"),
@@ -70,9 +85,45 @@ def load_settings() -> Settings:
         openai_api_key=_required("OPENAI_API_KEY") if _uses_provider("openai", agent_citizen, agent_scholar) else None,
         openai_model=os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2"),
         openai_voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
-        gemini_api_key=_required("GEMINI_API_KEY") if _uses_provider("gemini", agent_citizen, agent_scholar) else None,
-        gemini_model=os.getenv("GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview"),
+        gemini_api_key=gemini_auth.api_key if gemini_auth else None,
+        gemini_backend=gemini_auth.backend if gemini_auth else "ai_studio",
+        gemini_vertex_project=gemini_auth.project if gemini_auth else None,
+        gemini_vertex_location=gemini_auth.location if gemini_auth else None,
+        gemini_credentials_file=gemini_auth.credentials_file if gemini_auth else None,
+        gemini_model=gemini_live_model(gemini_auth.backend if gemini_auth else "ai_studio"),
     )
+
+
+def load_gemini_auth() -> GeminiAuthConfig:
+    backend = os.getenv("GEMINI_BACKEND", "ai_studio").strip().lower().replace("-", "_")
+    if backend == "ai_studio":
+        return GeminiAuthConfig(backend=backend, api_key=_required("GEMINI_API_KEY"))
+    if backend != "vertex":
+        raise RuntimeError(
+            f"GEMINI_BACKEND must be 'ai_studio' or 'vertex', got {backend!r}"
+        )
+
+    credentials_file = _required("GOOGLE_APPLICATION_CREDENTIALS")
+    credentials_path = Path(credentials_file).expanduser()
+    if not credentials_path.is_file():
+        raise RuntimeError(
+            f"GOOGLE_APPLICATION_CREDENTIALS does not point to a file: {credentials_file}"
+        )
+    return GeminiAuthConfig(
+        backend=backend,
+        project=_required("GOOGLE_CLOUD_PROJECT"),
+        location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+        credentials_file=str(credentials_path),
+    )
+
+
+def gemini_live_model(backend: str) -> str:
+    default = (
+        "gemini-live-2.5-flash-native-audio"
+        if backend == "vertex"
+        else "gemini-3.1-flash-live-preview"
+    )
+    return os.getenv("GEMINI_LIVE_MODEL", default)
 
 
 def _env(primary: str, legacy: str, *, default: str) -> str:

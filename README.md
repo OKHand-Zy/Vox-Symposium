@@ -84,6 +84,20 @@ GEMINI_API_KEY=your-gemini-api-key
 
 如果 `.env` 同時有 `GOOGLE_API_KEY` 和 `GEMINI_API_KEY`，Google SDK 會優先使用 `GOOGLE_API_KEY`，執行時會看到提示。要明確使用 `GEMINI_API_KEY`，請移除或 unset `GOOGLE_API_KEY`。
 
+也可以改用 Vertex AI 與 service account JSON 金鑰：
+
+```env
+AGENT_CITIZEN_PROVIDER=gemini
+AGENT_SCHOLAR_PROVIDER=gemini
+GEMINI_BACKEND=vertex
+GOOGLE_CLOUD_PROJECT=your-google-cloud-project
+GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+GEMINI_LIVE_MODEL=gemini-live-2.5-flash-native-audio
+```
+
+Vertex 模式不需要 `GEMINI_API_KEY`。JSON 路徑建議使用絕對路徑，service account 必須具備呼叫 Vertex AI 的權限，且專案需啟用 Vertex AI API。未設定 location 時預設為 `us-central1`，未設定 model 時預設為 `gemini-live-2.5-flash-native-audio`。此 Live model 不支援 `global` endpoint。
+
 **2. 轉換 scenario**
 
 轉換完整資料集：
@@ -283,8 +297,11 @@ pip install -e .
 - `LIVEKIT_URL`
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
-- `OPENAI_API_KEY`
-- `GEMINI_API_KEY`
+- provider 使用 OpenAI 時：`OPENAI_API_KEY`
+- Gemini 使用 AI Studio 時：`GEMINI_API_KEY`
+- Gemini 使用 Vertex AI 時：`GOOGLE_CLOUD_PROJECT`、`GOOGLE_APPLICATION_CREDENTIALS`
+
+Gemini 預設使用 AI Studio，因此需要 `GEMINI_API_KEY`。若要使用 Vertex AI，改設 `GEMINI_BACKEND=vertex`，並提供 `GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION` 與指向 service account JSON 的 `GOOGLE_APPLICATION_CREDENTIALS`；此時不需要 `GEMINI_API_KEY`。
 
 主要角色設定：
 
@@ -317,7 +334,7 @@ AGENT_CITIZEN_PROVIDER=gemini
 AGENT_SCHOLAR_PROVIDER=gemini
 ```
 
-程式只會要求實際使用到的 provider API key。如果兩個角色都使用 OpenAI，就只需要 `OPENAI_API_KEY`；如果兩個角色都使用 Gemini，就只需要 `GEMINI_API_KEY`。
+程式只會要求實際使用到的 provider 認證。如果兩個角色都使用 OpenAI，就只需要 `OPENAI_API_KEY`；Gemini 則依 `GEMINI_BACKEND` 要求 AI Studio API key 或 Vertex service account JSON。
 
 ## 啟動
 
@@ -390,6 +407,15 @@ OPENAI_API_KEY=your-openai-api-key
 
 ```env
 GEMINI_API_KEY=your-gemini-api-key
+```
+
+或使用 Vertex AI：
+
+```env
+GEMINI_BACKEND=vertex
+GOOGLE_CLOUD_PROJECT=your-google-cloud-project
+GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
 ```
 
 啟動測試：

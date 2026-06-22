@@ -5,9 +5,12 @@ from collections.abc import AsyncIterator
 
 from google import genai
 from google.genai import types
+from google.oauth2 import service_account
 
 from vox_symposium.audio import PcmAudio, normalize_audio
 from vox_symposium.models.base import RealtimeAudioModel
+
+VERTEX_AI_SCOPES = ("https://www.googleapis.com/auth/cloud-platform",)
 
 
 class GeminiLiveModel(RealtimeAudioModel):
@@ -17,7 +20,11 @@ class GeminiLiveModel(RealtimeAudioModel):
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str | None = None,
+        backend: str = "ai_studio",
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        credentials_file: str | None = None,
         model: str,
         instructions: str,
         manual_activity: bool = False,
@@ -26,7 +33,27 @@ class GeminiLiveModel(RealtimeAudioModel):
         self.model = model
         self.instructions = instructions
         self.manual_activity = manual_activity
-        self._client = genai.Client(api_key=api_key)
+        if backend == "vertex":
+            if not vertex_project or not vertex_location or not credentials_file:
+                raise ValueError(
+                    "Vertex Gemini requires project, location, and a service account credentials file"
+                )
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_file,
+                scopes=VERTEX_AI_SCOPES,
+            )
+            self._client = genai.Client(
+                vertexai=True,
+                project=vertex_project,
+                location=vertex_location,
+                credentials=credentials,
+            )
+        elif backend == "ai_studio":
+            if not api_key:
+                raise ValueError("AI Studio Gemini requires an API key")
+            self._client = genai.Client(api_key=api_key)
+        else:
+            raise ValueError(f"Unsupported Gemini backend: {backend!r}")
         self._session_cm = None
         self._session = None
         self._audio_out: asyncio.Queue[PcmAudio | None] = asyncio.Queue(maxsize=100)

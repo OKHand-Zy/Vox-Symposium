@@ -280,10 +280,12 @@ def build_model(settings: Settings, agent: AgentConfig) -> RealtimeAudioModel:
             instructions=agent.instructions,
         )
     if provider == "gemini":
-        if settings.gemini_api_key is None:
-            raise RuntimeError("GEMINI_API_KEY is required when a participant uses provider=gemini")
         return GeminiLiveModel(
             api_key=settings.gemini_api_key,
+            backend=settings.gemini_backend,
+            vertex_project=settings.gemini_vertex_project,
+            vertex_location=settings.gemini_vertex_location,
+            credentials_file=settings.gemini_credentials_file,
             model=settings.gemini_model,
             instructions=agent.instructions,
         )

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Two programmable LiveKit audio participants bridged to realtime audio models."
 requires-python = ">=3.11"
 dependencies = [
+    "google-auth>=2.14.1",
     "google-genai>=1.45.0",
     "livekit>=1.0.18",
     "livekit-api>=1.0.5",
