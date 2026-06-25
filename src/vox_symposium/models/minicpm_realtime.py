@@ -4,7 +4,6 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import AsyncIterator
 from urllib.parse import urlsplit
 
 from websockets.asyncio.client import ClientConnection, connect
@@ -15,7 +14,7 @@ from vox_symposium.audio import (
     normalize_audio,
     pcm16_to_float32,
 )
-from vox_symposium.models.base import RealtimeAudioModel
+from vox_symposium.models.base import QueueBackedRealtimeAudioModel
 
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,7 @@ EVALUATION_TURN_TAKING_POLICY = """Full-duplex speaking policy:
 - Do not remain in listen mode after the partner has finished speaking."""
 
 
-class MiniCPMRealtimeModel(RealtimeAudioModel):
+class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
     """MiniCPM-o 4.5 Audio Full-Duplex Gateway adapter."""
 
     input_sample_rate = 16_000
@@ -43,6 +42,7 @@ class MiniCPMRealtimeModel(RealtimeAudioModel):
         queue_timeout: float = 300.0,
         evaluation_turn_taking: bool = False,
     ) -> None:
+        super().__init__()
         if not url.startswith(("ws://", "wss://")):
             raise ValueError("MiniCPM realtime URL must use ws:// or wss://")
         if urlsplit(url).hostname in {"0.0.0.0", "::"}:
@@ -70,8 +70,6 @@ class MiniCPMRealtimeModel(RealtimeAudioModel):
         self._input_chunk_bytes = int(self.input_sample_rate * input_chunk_ms / 1_000) * 4
         self._input_buffer = bytearray()
         self._ws: ClientConnection | None = None
-        self._audio_out: asyncio.Queue[PcmAudio | None] = asyncio.Queue(maxsize=100)
-        self._text_out: asyncio.Queue[str | None] = asyncio.Queue(maxsize=100)
         self._reader_task: asyncio.Task[None] | None = None
         self._silence_task: asyncio.Task[None] | None = None
         self._session_created = False
@@ -153,24 +151,11 @@ class MiniCPMRealtimeModel(RealtimeAudioModel):
             return
         await self._flush_input_buffer()
 
-    async def receive_audio(self) -> AsyncIterator[PcmAudio]:
-        while True:
-            item = await self._audio_out.get()
-            if item is None:
-                return
-            yield item
-
-    async def receive_text(self) -> AsyncIterator[str]:
-        while True:
-            item = await self._text_out.get()
-            if item is None:
-                return
-            yield item
-
     async def close(self) -> None:
         await self._stop_evaluation_silence()
         ws = self._ws
         if ws is None:
+            self.close_output_streams()
             return
 
         if self._session_created:
@@ -191,6 +176,7 @@ class MiniCPMRealtimeModel(RealtimeAudioModel):
         await ws.close()
         self._ws = None
         self._session_created = False
+        self.close_output_streams()
 
     async def _wait_for_event(self, expected_type: str) -> dict:
         if self._ws is None:
@@ -277,8 +263,7 @@ class MiniCPMRealtimeModel(RealtimeAudioModel):
         except Exception:
             logger.exception("MiniCPM realtime reader stopped with an error")
         finally:
-            await self._audio_out.put(None)
-            await self._text_out.put(None)
+            self.close_output_streams()
 
     async def _pump_evaluation_silence(self) -> None:
         silence = b"\x00" * self._input_chunk_bytes

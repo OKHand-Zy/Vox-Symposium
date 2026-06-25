@@ -5,17 +5,17 @@ import contextlib
 import logging
 import time
 from array import array
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from livekit import api, rtc
 
 from vox_symposium.audio import PcmAudio, normalize_audio, rechunk_pcm16
 from vox_symposium.config import AgentConfig, Settings
 from vox_symposium.models.base import RealtimeAudioModel
-from vox_symposium.models.gemini_live import GeminiLiveModel
-from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
-from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
+from vox_symposium.models.factory import build_model_from_settings
 from vox_symposium.recording import ConversationRecorder, audio_event_fields, write_wav
 
 
@@ -63,8 +63,8 @@ class ProgrammableParticipant:
         logger.info("%s published model audio track", self.agent.identity)
         self._attach_existing_remote_tracks()
 
-        self._tasks.add(asyncio.create_task(self._publish_model_audio(), name=f"{self.agent.identity}-publisher"))
-        self._tasks.add(asyncio.create_task(self._consume_model_text(), name=f"{self.agent.identity}-text"))
+        self._track_task(self._publish_model_audio(), name=f"{self.agent.identity}-publisher")
+        self._track_task(self._consume_model_text(), name=f"{self.agent.identity}-text")
         await self._closed.wait()
 
     async def close(self) -> None:
@@ -105,12 +105,21 @@ class ProgrammableParticipant:
         if track.kind != rtc.TrackKind.KIND_AUDIO:
             return
         logger.info("%s subscribed to %s audio track", self.agent.identity, participant.identity)
-        task = asyncio.create_task(
+        self._track_task(
             self._forward_livekit_audio_to_model(track),
             name=f"{self.agent.identity}-from-{participant.identity}",
         )
+
+    def _track_task(
+        self,
+        coro: Coroutine[Any, Any, None],
+        *,
+        name: str,
+    ) -> asyncio.Task[None]:
+        task = asyncio.create_task(coro, name=name)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return task
 
     def _attach_existing_remote_tracks(self) -> None:
         for participant in self.room.remote_participants.values():
@@ -161,11 +170,11 @@ class ProgrammableParticipant:
         byte_count = 0
         last_log_at = time.monotonic()
         turn_chunks: list[PcmAudio] = []
+        recording_enabled = self.recorder is not None and self.recording_dir is not None
         audio_iter = self.model.receive_audio().__aiter__()
         pending_audio = asyncio.create_task(anext(audio_iter))
         try:
             while True:
-                recording_enabled = self.recorder is not None and self.recording_dir is not None
                 timeout = RECORDING_TURN_IDLE_SECONDS if recording_enabled and turn_chunks else None
                 done, _ = await asyncio.wait({pending_audio}, timeout=timeout)
                 if not done:
@@ -207,11 +216,12 @@ class ProgrammableParticipant:
             to_rate=self.settings.publish_sample_rate,
             channels=audio.channels,
         )
+        samples_per_frame = int(self.settings.publish_sample_rate * self.settings.frame_ms / 1000)
         for chunk in rechunk_pcm16(pcm48, self.settings.publish_sample_rate, self.settings.frame_ms):
             frame = rtc.AudioFrame.create(
                 self.settings.publish_sample_rate,
                 1,
-                int(self.settings.publish_sample_rate * self.settings.frame_ms / 1000),
+                samples_per_frame,
             )
             try:
                 frame.data[:] = chunk
@@ -270,42 +280,4 @@ class ProgrammableParticipant:
 
 
 def build_model(settings: Settings, agent: AgentConfig) -> RealtimeAudioModel:
-    provider = agent.provider.lower()
-    if provider == "openai":
-        if settings.openai_api_key is None:
-            raise RuntimeError(
-                "OpenAI credentials are required when a participant uses provider=openai"
-            )
-        return OpenAIRealtimeModel(
-            api_key=settings.openai_api_key,
-            backend=settings.openai_backend,
-            endpoint=settings.openai_endpoint,
-            api_version=settings.openai_api_version,
-            model=settings.openai_model,
-            voice=settings.openai_voice,
-            instructions=agent.instructions,
-        )
-    if provider == "gemini":
-        return GeminiLiveModel(
-            api_key=settings.gemini_api_key,
-            backend=settings.gemini_backend,
-            vertex_project=settings.gemini_vertex_project,
-            vertex_location=settings.gemini_vertex_location,
-            credentials_file=settings.gemini_credentials_file,
-            model=settings.gemini_model,
-            instructions=agent.instructions,
-        )
-    if provider == "minicpm":
-        if settings.minicpm_realtime_url is None:
-            raise RuntimeError(
-                "MINICPM_REALTIME_URL is required when a participant uses provider=minicpm"
-            )
-        return MiniCPMRealtimeModel(
-            url=settings.minicpm_realtime_url,
-            api_key=settings.minicpm_api_key,
-            instructions=agent.instructions,
-            length_penalty=settings.minicpm_length_penalty,
-            input_chunk_ms=settings.minicpm_input_chunk_ms,
-            queue_timeout=settings.minicpm_queue_timeout,
-        )
-    raise RuntimeError(f"Unsupported provider for {agent.identity}: {agent.provider}")
+    return build_model_from_settings(settings, agent)

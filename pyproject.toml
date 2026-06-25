@@ -12,6 +12,12 @@ dependencies = [
     "websockets>=13.1",
 ]
 
+[project.optional-dependencies]
+moshi = [
+    "numpy>=1.26,<2.3",
+    "sphn>=0.2.0,<0.3.0",
+]
+
 [project.scripts]
 vox-symposium = "vox_symposium.main:main"
 vox-symposium-evaluate = "vox_symposium.evaluation:main"

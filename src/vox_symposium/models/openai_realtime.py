@@ -3,16 +3,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from collections.abc import AsyncIterator
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from websockets.asyncio.client import ClientConnection, connect
 
 from vox_symposium.audio import PcmAudio, normalize_audio
-from vox_symposium.models.base import RealtimeAudioModel
+from vox_symposium.models.base import QueueBackedRealtimeAudioModel
 
 
-class OpenAIRealtimeModel(RealtimeAudioModel):
+class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
     input_sample_rate = 24_000
     output_sample_rate = 24_000
 
@@ -28,6 +27,7 @@ class OpenAIRealtimeModel(RealtimeAudioModel):
         api_version: str | None = None,
         manual_activity: bool = False,
     ) -> None:
+        super().__init__()
         self.api_key = api_key
         self.model = model
         self.voice = voice
@@ -37,8 +37,6 @@ class OpenAIRealtimeModel(RealtimeAudioModel):
         self.api_version = api_version
         self.manual_activity = manual_activity
         self._ws: ClientConnection | None = None
-        self._audio_out: asyncio.Queue[PcmAudio | None] = asyncio.Queue(maxsize=100)
-        self._text_out: asyncio.Queue[str | None] = asyncio.Queue(maxsize=100)
         self._reader_task: asyncio.Task[None] | None = None
 
     async def connect(self) -> None:
@@ -140,27 +138,12 @@ class OpenAIRealtimeModel(RealtimeAudioModel):
             }
         )
 
-    async def receive_audio(self) -> AsyncIterator[PcmAudio]:
-        while True:
-            item = await self._audio_out.get()
-            if item is None:
-                return
-            yield item
-
-    async def receive_text(self) -> AsyncIterator[str]:
-        while True:
-            item = await self._text_out.get()
-            if item is None:
-                return
-            yield item
-
     async def close(self) -> None:
         if self._reader_task:
             self._reader_task.cancel()
         if self._ws:
             await self._ws.close()
-        await self._audio_out.put(None)
-        await self._text_out.put(None)
+        self.close_output_streams()
 
     async def _send(self, event: dict) -> None:
         if self._ws is None:
@@ -204,5 +187,4 @@ class OpenAIRealtimeModel(RealtimeAudioModel):
                 elif event_type == "error":
                     raise RuntimeError(f"OpenAI realtime error: {event}")
         finally:
-            await self._audio_out.put(None)
-            await self._text_out.put(None)
+            self.close_output_streams()

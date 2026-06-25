@@ -203,7 +203,10 @@ def build_agent_instructions(scenario: dict[str, Any], agent: AgentKey) -> str:
     if agent == "citizen":
         lines.append("- You are the simulated conversation partner, not the model being evaluated.")
     else:
-        lines.append("- You are the voice model being evaluated; answer later evaluation questions with the best choice only when asked.")
+        lines.append(
+            "- You are the voice model being evaluated; answer later evaluation questions "
+            "with the best choice only when asked."
+        )
 
     return "\n".join(lines)
 

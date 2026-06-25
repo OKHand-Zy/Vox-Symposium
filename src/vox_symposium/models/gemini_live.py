@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 
 from google import genai
 from google.genai import types
 from google.oauth2 import service_account
 
 from vox_symposium.audio import PcmAudio, normalize_audio
-from vox_symposium.models.base import RealtimeAudioModel
+from vox_symposium.models.base import QueueBackedRealtimeAudioModel
 
 VERTEX_AI_SCOPES = ("https://www.googleapis.com/auth/cloud-platform",)
 
 
-class GeminiLiveModel(RealtimeAudioModel):
+class GeminiLiveModel(QueueBackedRealtimeAudioModel):
     input_sample_rate = 16_000
     output_sample_rate = 24_000
 
@@ -29,6 +28,7 @@ class GeminiLiveModel(RealtimeAudioModel):
         instructions: str,
         manual_activity: bool = False,
     ) -> None:
+        super().__init__()
         self.api_key = api_key
         self.model = model
         self.instructions = instructions
@@ -56,8 +56,6 @@ class GeminiLiveModel(RealtimeAudioModel):
             raise ValueError(f"Unsupported Gemini backend: {backend!r}")
         self._session_cm = None
         self._session = None
-        self._audio_out: asyncio.Queue[PcmAudio | None] = asyncio.Queue(maxsize=100)
-        self._text_out: asyncio.Queue[str | None] = asyncio.Queue(maxsize=100)
         self._reader_task: asyncio.Task[None] | None = None
 
     async def connect(self) -> None:
@@ -105,27 +103,12 @@ class GeminiLiveModel(RealtimeAudioModel):
         if self.manual_activity:
             await self._session.send_realtime_input(activity_end=types.ActivityEnd())
 
-    async def receive_audio(self) -> AsyncIterator[PcmAudio]:
-        while True:
-            item = await self._audio_out.get()
-            if item is None:
-                return
-            yield item
-
-    async def receive_text(self) -> AsyncIterator[str]:
-        while True:
-            item = await self._text_out.get()
-            if item is None:
-                return
-            yield item
-
     async def close(self) -> None:
         if self._reader_task:
             self._reader_task.cancel()
         if self._session_cm is not None:
             await self._session_cm.__aexit__(None, None, None)
-        await self._audio_out.put(None)
-        await self._text_out.put(None)
+        self.close_output_streams()
 
     async def _read_loop(self) -> None:
         if self._session is None:
@@ -150,5 +133,4 @@ class GeminiLiveModel(RealtimeAudioModel):
                                 )
                             )
         finally:
-            await self._audio_out.put(None)
-            await self._text_out.put(None)
+            self.close_output_streams()

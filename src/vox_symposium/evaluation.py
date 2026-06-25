@@ -12,13 +12,17 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from vox_symposium.audio import PcmAudio, rechunk_pcm16
+from vox_symposium.config import gemini_live_model
+from vox_symposium.env import env_with_legacy, first_env, normalized_env
 from vox_symposium.models.base import RealtimeAudioModel
+from vox_symposium.models.factory import build_model_from_env
 from vox_symposium.recording import RecordedAudio, audio_event_fields, write_wav
 from vox_symposium.scenario import (
     build_evaluation_result,
     load_scenario,
     write_evaluation_result,
 )
+from vox_symposium.providers import normalize_provider
 
 try:
     from dotenv import load_dotenv
@@ -98,6 +102,7 @@ async def run() -> None:
         )
 
         _drain_queue(text_queues["scholar"])
+        _drain_queue(audio_queues["scholar"])
         question_audio = _question_audio(
             scenario.data,
             question_audio=args.question_audio,
@@ -113,6 +118,7 @@ async def run() -> None:
                 "after_scholar_turns": scholar_turns,
             }
         )
+        print(f"Playing evaluation question into scholar: {question_audio}")
         await _send_audio_file(question_audio, scholar, frame_ms=args.frame_ms, audio_speed=args.audio_speed)
 
         answer = await _collect_utterance(
@@ -132,6 +138,7 @@ async def run() -> None:
                 **audio_event_fields(answer_recording),
             }
         )
+        print(f"Captured scholar answer evaluation question: {answer_audio}")
 
         dialogue_log_path = artifact_dir / "dialogue-log.json"
         _write_json(dialogue_log_path, dialogue_log)
@@ -214,6 +221,7 @@ async def _run_dialogue_turns(
     current_agent = start_agent
     scholar_turns = 0
     event_index = 0
+    turn_counts = {"citizen": 0, "scholar": 0}
 
     while scholar_turns < target_turns:
         utterance = await _collect_utterance(
@@ -223,6 +231,8 @@ async def _run_dialogue_turns(
             max_seconds=max_utterance_seconds,
         )
         event_index += 1
+        turn_counts[current_agent] += 1
+        turn_index = turn_counts[current_agent]
         if current_agent == "scholar":
             scholar_turns += 1
         utterance_path = artifact_dir / f"dialogue-{event_index:02d}-{current_agent}.wav"
@@ -232,12 +242,13 @@ async def _run_dialogue_turns(
             {
                 "type": "dialogue_turn",
                 "agent": current_agent,
+                "turn_index": turn_index,
                 "scholar_turns": scholar_turns,
                 "text": text,
                 **audio_event_fields(recording),
             }
         )
-        print(f"Captured {current_agent} turn {event_index}; scholar_turns={scholar_turns}")
+        print(_format_dialogue_capture(current_agent, turn_index))
 
         if current_agent == "scholar" and scholar_turns >= target_turns:
             break
@@ -248,6 +259,11 @@ async def _run_dialogue_turns(
         current_agent = receiver
 
     return scholar_turns
+
+
+def _format_dialogue_capture(agent: str, turn_index: int) -> str:
+    turn_word = "turns" if agent == "scholar" else "turn"
+    return f"Captured {agent} {turn_word} {turn_index}"
 
 
 async def _collect_utterance(
@@ -337,56 +353,14 @@ async def _collect_text_after_audio(queue: asyncio.Queue[str | None]) -> str:
 
 
 def _build_model(agent: str, instructions: str) -> RealtimeAudioModel:
-    provider = _env(f"AGENT_{agent.upper()}_PROVIDER", f"AGENT_{'A' if agent == 'citizen' else 'B'}_PROVIDER", default=_default_provider(agent)).lower()
-    if provider == "openai":
-        try:
-            from vox_symposium.config import load_openai_auth
-            from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
-        except ModuleNotFoundError as exc:
-            raise RuntimeError("OpenAI provider dependencies are missing. Run `pip install -r requirements.txt`.") from exc
-
-        auth = load_openai_auth()
-        return OpenAIRealtimeModel(
-            api_key=auth.api_key,
-            backend=auth.backend,
-            endpoint=auth.endpoint,
-            api_version=auth.api_version,
-            model=auth.model,
-            voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
-            instructions=instructions,
-            manual_activity=True,
+    provider = normalize_provider(
+        env_with_legacy(
+            f"AGENT_{agent.upper()}_PROVIDER",
+            f"AGENT_{'A' if agent == 'citizen' else 'B'}_PROVIDER",
+            default=_default_provider(agent),
         )
-    if provider == "gemini":
-        try:
-            from vox_symposium.models.gemini_live import GeminiLiveModel
-            from vox_symposium.config import gemini_live_model, load_gemini_auth
-        except ModuleNotFoundError as exc:
-            raise RuntimeError("Gemini provider dependencies are missing. Run `pip install -r requirements.txt`.") from exc
-
-        auth = load_gemini_auth()
-        return GeminiLiveModel(
-            api_key=auth.api_key,
-            backend=auth.backend,
-            vertex_project=auth.project,
-            vertex_location=auth.location,
-            credentials_file=auth.credentials_file,
-            model=gemini_live_model(auth.backend),
-            instructions=instructions,
-            manual_activity=True,
-        )
-    if provider == "minicpm":
-        from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
-
-        return MiniCPMRealtimeModel(
-            url=_required("MINICPM_REALTIME_URL"),
-            api_key=os.getenv("MINICPM_API_KEY") or None,
-            instructions=instructions,
-            length_penalty=_float_env("MINICPM_LENGTH_PENALTY", 1.1),
-            input_chunk_ms=_int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
-            queue_timeout=_float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
-            evaluation_turn_taking=True,
-        )
-    raise RuntimeError(f"Unsupported provider for {agent}: {provider}")
+    )
+    return build_model_from_env(provider, instructions, evaluation_mode=True)
 
 
 def _question_audio(
@@ -544,8 +518,14 @@ def _write_run_env_snapshot(artifact_dir: Path, *, run_id: str, args: argparse.N
 def _agent_env_snapshot(agent: str) -> list[str]:
     legacy_agent = "A" if agent == "citizen" else "B"
     prefix = f"AGENT_{agent.upper()}"
-    provider = _env(f"{prefix}_PROVIDER", f"AGENT_{legacy_agent}_PROVIDER", default=_default_provider(agent)).lower()
-    identity = _env(
+    provider = normalize_provider(
+        env_with_legacy(
+            f"{prefix}_PROVIDER",
+            f"AGENT_{legacy_agent}_PROVIDER",
+            default=_default_provider(agent),
+        )
+    )
+    identity = env_with_legacy(
         f"{prefix}_IDENTITY",
         f"AGENT_{legacy_agent}_IDENTITY",
         default=f"agent-{agent}",
@@ -563,32 +543,53 @@ def _agent_env_snapshot(agent: str) -> list[str]:
 
 
 def _effective_model_snapshot(provider: str) -> tuple[str, str | None, dict[str, str]]:
+    provider = normalize_provider(provider)
     if provider == "openai":
-        backend = _normalized_env("OPENAI_BACKEND", "openai")
+        backend = normalized_env("OPENAI_BACKEND", "openai")
         if backend in {"azure", "azure_openai"}:
             return os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", ""), "azure", {}
         return os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2"), "openai", {
             "VOICE": os.getenv("OPENAI_REALTIME_VOICE", "marin"),
         }
     if provider == "gemini":
-        backend = _normalized_env("GEMINI_BACKEND", "ai_studio")
-        return _gemini_live_model_default(backend), backend, {}
+        backend = normalized_env("GEMINI_BACKEND", "ai_studio")
+        return gemini_live_model(backend), backend, {}
     if provider == "minicpm":
         return os.getenv("MINICPM_REALTIME_MODEL", "minicpm-realtime-gateway"), None, {}
+    if provider == "moshi":
+        return os.getenv("MOSHI_MODEL", "moshi"), "moshi", {
+            "REALTIME_URL": _redacted_url(os.getenv("MOSHI_REALTIME_URL", "")),
+        }
+    if provider == "personaplex":
+        return os.getenv("PERSONAPLEX_MODEL", "personaplex"), "pcm_gateway", {
+            "REALTIME_URL": _redacted_url(os.getenv("PERSONAPLEX_REALTIME_URL", "")),
+            "INPUT_SAMPLE_RATE": os.getenv("PERSONAPLEX_INPUT_SAMPLE_RATE", "24000"),
+            "OUTPUT_SAMPLE_RATE": os.getenv("PERSONAPLEX_OUTPUT_SAMPLE_RATE", "24000"),
+        }
+    if provider == "covo_audio_chat_fd":
+        return (
+            _covo_env("MODEL", "covo_audio_chat_fd"),
+            "pcm_gateway",
+            {
+                "REALTIME_URL": _redacted_url(_covo_env("REALTIME_URL", "")),
+                "INPUT_SAMPLE_RATE": _covo_env("INPUT_SAMPLE_RATE", "24000"),
+                "OUTPUT_SAMPLE_RATE": _covo_env("OUTPUT_SAMPLE_RATE", "24000"),
+            },
+        )
     return "", None, {}
 
 
 def _provider_env_snapshot() -> list[str]:
     lines = [
-        "OPENAI_BACKEND=" + _env_value(_normalized_env("OPENAI_BACKEND", "openai")),
+        "OPENAI_BACKEND=" + _env_value(normalized_env("OPENAI_BACKEND", "openai")),
         "OPENAI_REALTIME_MODEL=" + _env_value(os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")),
         "OPENAI_REALTIME_VOICE=" + _env_value(os.getenv("OPENAI_REALTIME_VOICE", "marin")),
         "AZURE_OPENAI_DEPLOYMENT_NAME=" + _env_value(os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "")),
         "AZURE_OPENAI_ENDPOINT=" + _env_value(os.getenv("AZURE_OPENAI_ENDPOINT", "")),
         "AZURE_OPENAI_API_VERSION=" + _env_value(os.getenv("AZURE_OPENAI_API_VERSION", "")),
         "",
-        "GEMINI_BACKEND=" + _env_value(_normalized_env("GEMINI_BACKEND", "ai_studio")),
-        "GEMINI_LIVE_MODEL=" + _env_value(_gemini_live_model_default(_normalized_env("GEMINI_BACKEND", "ai_studio"))),
+        "GEMINI_BACKEND=" + _env_value(normalized_env("GEMINI_BACKEND", "ai_studio")),
+        "GEMINI_LIVE_MODEL=" + _env_value(gemini_live_model(normalized_env("GEMINI_BACKEND", "ai_studio"))),
         "GOOGLE_CLOUD_PROJECT=" + _env_value(os.getenv("GOOGLE_CLOUD_PROJECT", "")),
         "GOOGLE_CLOUD_LOCATION=" + _env_value(os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")),
         "",
@@ -597,21 +598,21 @@ def _provider_env_snapshot() -> list[str]:
         "MINICPM_LENGTH_PENALTY=" + _env_value(os.getenv("MINICPM_LENGTH_PENALTY", "1.1")),
         "MINICPM_INPUT_CHUNK_MS=" + _env_value(os.getenv("MINICPM_INPUT_CHUNK_MS", "1000")),
         "MINICPM_QUEUE_TIMEOUT=" + _env_value(os.getenv("MINICPM_QUEUE_TIMEOUT", "300.0")),
+        "",
+        "MOSHI_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("MOSHI_REALTIME_URL", ""))),
+        "MOSHI_MODEL=" + _env_value(os.getenv("MOSHI_MODEL", "moshi")),
+        "",
+        "PERSONAPLEX_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("PERSONAPLEX_REALTIME_URL", ""))),
+        "PERSONAPLEX_MODEL=" + _env_value(os.getenv("PERSONAPLEX_MODEL", "personaplex")),
+        "PERSONAPLEX_INPUT_SAMPLE_RATE=" + _env_value(os.getenv("PERSONAPLEX_INPUT_SAMPLE_RATE", "24000")),
+        "PERSONAPLEX_OUTPUT_SAMPLE_RATE=" + _env_value(os.getenv("PERSONAPLEX_OUTPUT_SAMPLE_RATE", "24000")),
+        "",
+        "COVO_AUDIO_CHAT_FD_REALTIME_URL=" + _env_value(_redacted_url(_covo_env("REALTIME_URL", ""))),
+        "COVO_AUDIO_CHAT_FD_MODEL=" + _env_value(_covo_env("MODEL", "covo_audio_chat_fd")),
+        "COVO_AUDIO_CHAT_FD_INPUT_SAMPLE_RATE=" + _env_value(_covo_env("INPUT_SAMPLE_RATE", "24000")),
+        "COVO_AUDIO_CHAT_FD_OUTPUT_SAMPLE_RATE=" + _env_value(_covo_env("OUTPUT_SAMPLE_RATE", "24000")),
     ]
     return lines
-
-
-def _gemini_live_model_default(backend: str) -> str:
-    default = (
-        "gemini-live-2.5-flash-native-audio"
-        if backend == "vertex"
-        else "gemini-3.1-flash-live-preview"
-    )
-    return os.getenv("GEMINI_LIVE_MODEL", default)
-
-
-def _normalized_env(name: str, default: str) -> str:
-    return os.getenv(name, default).strip().lower().replace("-", "_")
 
 
 def _env_value(value: object) -> str:
@@ -643,7 +644,7 @@ def _redacted_url(value: str) -> str:
     return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
 
 
-def _drain_queue(queue: asyncio.Queue[str | None]) -> None:
+def _drain_queue(queue: asyncio.Queue[Any]) -> None:
     while True:
         try:
             queue.get_nowait()
@@ -655,35 +656,8 @@ def _other_agent(agent: str) -> str:
     return "scholar" if agent == "citizen" else "citizen"
 
 
-def _env(primary: str, legacy: str, *, default: str) -> str:
-    return os.getenv(primary) or os.getenv(legacy) or default
-
-
-def _int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
-
-
-def _float_env(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
-
-
-def _required(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
+def _covo_env(suffix: str, default: str) -> str:
+    return first_env([f"COVO_AUDIO_CHAT_FD_{suffix}", f"COVO_{suffix}"]) or default
 
 
 def _default_provider(agent: str) -> str:
@@ -698,15 +672,35 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--index", dest="scenario_index", type=int, help="Select a scenario by zero-based index.")
     parser.add_argument("--audio-dir", help="Directory containing original speech wav files.")
     parser.add_argument("--dialogue-turns", type=int, default=5, help="Scholar turns before evaluation.")
-    parser.add_argument("--question-audio", help="Evaluation question wav file. Overrides scenario evaluation.question_audio.")
+    parser.add_argument(
+        "--question-audio",
+        help="Evaluation question wav file. Overrides scenario evaluation.question_audio.",
+    )
     parser.add_argument("--answer-audio", help="Where to save the evaluated scholar answer wav.")
     parser.add_argument("--artifact-dir", help="Directory for dialogue logs and captured wav files.")
     parser.add_argument("--run-id", help="Stable run id for this evaluation.")
     parser.add_argument("--frame-ms", type=int, default=20, help="Audio frame size used to stream wav files.")
-    parser.add_argument("--audio-speed", type=float, default=float(os.getenv("EVALUATION_AUDIO_SPEED", "1.0")), help="Audio injection speed. 1.0 is realtime; higher values send audio faster and may affect streaming VAD/turn detection; 0 disables sleeps.")
+    parser.add_argument(
+        "--audio-speed",
+        type=float,
+        default=float(os.getenv("EVALUATION_AUDIO_SPEED", "1.0")),
+        help=(
+            "Audio injection speed. 1.0 is realtime; higher values send audio faster and may "
+            "affect streaming VAD/turn detection; 0 disables sleeps."
+        ),
+    )
     parser.add_argument("--idle-timeout", type=float, default=1.5, help="Silence timeout used to end an utterance.")
-    parser.add_argument("--max-utterance-seconds", type=float, default=30.0, help="Maximum seconds to wait for one utterance.")
-    parser.add_argument("--no-tts", action="store_true", help="Require question audio instead of generating it with macOS say.")
+    parser.add_argument(
+        "--max-utterance-seconds",
+        type=float,
+        default=30.0,
+        help="Maximum seconds to wait for one utterance.",
+    )
+    parser.add_argument(
+        "--no-tts",
+        action="store_true",
+        help="Require question audio instead of generating it with macOS say.",
+    )
     return parser.parse_args()
 
 

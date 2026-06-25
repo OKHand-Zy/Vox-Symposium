@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+import os
+from typing import TYPE_CHECKING
+
+from vox_symposium.config import (
+    gemini_live_model,
+    load_gemini_auth,
+    load_moshi_settings,
+    load_openai_auth,
+    load_pcm_gateway_settings,
+)
+from vox_symposium.env import float_env, int_env, required_env
+from vox_symposium.models.base import RealtimeAudioModel
+from vox_symposium.providers import PCM_GATEWAY_PROVIDERS, normalize_provider, provider_label
+
+if TYPE_CHECKING:
+    from vox_symposium.config import AgentConfig, PcmGatewaySettings, Settings
+
+
+def build_model_from_settings(
+    settings: Settings,
+    agent: AgentConfig,
+    *,
+    evaluation_mode: bool = False,
+) -> RealtimeAudioModel:
+    provider = normalize_provider(agent.provider)
+    if provider == "openai":
+        if settings.openai_api_key is None:
+            raise RuntimeError(
+                "OpenAI credentials are required when a participant uses provider=openai"
+            )
+        from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
+
+        return OpenAIRealtimeModel(
+            api_key=settings.openai_api_key,
+            backend=settings.openai_backend,
+            endpoint=settings.openai_endpoint,
+            api_version=settings.openai_api_version,
+            model=settings.openai_model,
+            voice=settings.openai_voice,
+            instructions=agent.instructions,
+            manual_activity=evaluation_mode,
+        )
+
+    if provider == "gemini":
+        from vox_symposium.models.gemini_live import GeminiLiveModel
+
+        return GeminiLiveModel(
+            api_key=settings.gemini_api_key,
+            backend=settings.gemini_backend,
+            vertex_project=settings.gemini_vertex_project,
+            vertex_location=settings.gemini_vertex_location,
+            credentials_file=settings.gemini_credentials_file,
+            model=settings.gemini_model,
+            instructions=agent.instructions,
+            manual_activity=evaluation_mode,
+        )
+
+    if provider == "minicpm":
+        if settings.minicpm_realtime_url is None:
+            raise RuntimeError(
+                "MINICPM_REALTIME_URL is required when a participant uses provider=minicpm"
+            )
+        from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
+
+        return MiniCPMRealtimeModel(
+            url=settings.minicpm_realtime_url,
+            api_key=settings.minicpm_api_key,
+            instructions=agent.instructions,
+            length_penalty=settings.minicpm_length_penalty,
+            input_chunk_ms=settings.minicpm_input_chunk_ms,
+            queue_timeout=settings.minicpm_queue_timeout,
+            evaluation_turn_taking=evaluation_mode,
+        )
+
+    if provider == "moshi":
+        if settings.moshi is None:
+            raise RuntimeError(
+                "MOSHI_REALTIME_URL is required when a participant uses provider=moshi"
+            )
+        from vox_symposium.models.moshi_realtime import MoshiRealtimeModel
+
+        return MoshiRealtimeModel(url=settings.moshi.url, api_key=settings.moshi.api_key)
+
+    if provider in PCM_GATEWAY_PROVIDERS:
+        try:
+            gateway = settings.pcm_gateways[provider]
+        except KeyError as exc:
+            raise RuntimeError(
+                f"{provider_label(provider)} realtime URL is required when a participant uses "
+                f"provider={provider}"
+            ) from exc
+        return _build_pcm_gateway(gateway, agent.instructions, evaluation_mode=evaluation_mode)
+
+    raise RuntimeError(f"Unsupported provider for {agent.identity}: {agent.provider}")
+
+
+def build_model_from_env(
+    provider: str,
+    instructions: str,
+    *,
+    evaluation_mode: bool = False,
+) -> RealtimeAudioModel:
+    provider = normalize_provider(provider)
+    if provider == "openai":
+        from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
+
+        auth = load_openai_auth()
+        return OpenAIRealtimeModel(
+            api_key=auth.api_key,
+            backend=auth.backend,
+            endpoint=auth.endpoint,
+            api_version=auth.api_version,
+            model=auth.model,
+            voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
+            instructions=instructions,
+            manual_activity=evaluation_mode,
+        )
+
+    if provider == "gemini":
+        from vox_symposium.models.gemini_live import GeminiLiveModel
+
+        auth = load_gemini_auth()
+        return GeminiLiveModel(
+            api_key=auth.api_key,
+            backend=auth.backend,
+            vertex_project=auth.project,
+            vertex_location=auth.location,
+            credentials_file=auth.credentials_file,
+            model=gemini_live_model(auth.backend),
+            instructions=instructions,
+            manual_activity=evaluation_mode,
+        )
+
+    if provider == "minicpm":
+        from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
+
+        return MiniCPMRealtimeModel(
+            url=required_env("MINICPM_REALTIME_URL"),
+            api_key=os.getenv("MINICPM_API_KEY") or None,
+            instructions=instructions,
+            length_penalty=float_env("MINICPM_LENGTH_PENALTY", 1.1),
+            input_chunk_ms=int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
+            queue_timeout=float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
+            evaluation_turn_taking=evaluation_mode,
+        )
+
+    if provider == "moshi":
+        from vox_symposium.models.moshi_realtime import MoshiRealtimeModel
+
+        settings = load_moshi_settings(required=True)
+        if settings is None:
+            raise RuntimeError("MOSHI_REALTIME_URL is required when provider=moshi")
+        return MoshiRealtimeModel(url=settings.url, api_key=settings.api_key)
+
+    if provider in PCM_GATEWAY_PROVIDERS:
+        gateway = load_pcm_gateway_settings(provider, required=True)
+        if gateway is None:
+            raise RuntimeError(f"{provider_label(provider)} realtime URL is required when provider={provider}")
+        return _build_pcm_gateway(gateway, instructions, evaluation_mode=evaluation_mode)
+
+    raise RuntimeError(f"Unsupported provider: {provider}")
+
+
+def _build_pcm_gateway(
+    gateway: PcmGatewaySettings,
+    instructions: str,
+    *,
+    evaluation_mode: bool,
+) -> RealtimeAudioModel:
+    from vox_symposium.models.pcm_gateway import PcmGatewayRealtimeModel
+
+    return PcmGatewayRealtimeModel(
+        provider_name=provider_label(gateway.provider),
+        url=gateway.url,
+        api_key=gateway.api_key,
+        model=gateway.model,
+        instructions=instructions,
+        input_sample_rate=gateway.input_sample_rate,
+        output_sample_rate=gateway.output_sample_rate,
+        manual_activity=evaluation_mode or gateway.manual_activity,
+    )

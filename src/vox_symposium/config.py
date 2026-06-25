@@ -3,12 +3,31 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:
     def load_dotenv() -> bool:
         return False
+
+from vox_symposium.env import (
+    bool_env_any,
+    env_with_legacy,
+    first_env,
+    float_env,
+    int_env,
+    int_env_any,
+    normalized_env,
+    optional_int_env,
+    required_env,
+)
+from vox_symposium.providers import (
+    PCM_GATEWAY_PROVIDERS,
+    SUPPORTED_PROVIDERS,
+    normalize_provider,
+    provider_env_prefix,
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +64,8 @@ class Settings:
     minicpm_length_penalty: float
     minicpm_input_chunk_ms: int
     minicpm_queue_timeout: float
+    moshi: MoshiSettings | None
+    pcm_gateways: dict[str, PcmGatewaySettings]
 
 
 @dataclass(frozen=True)
@@ -65,21 +86,38 @@ class OpenAIAuthConfig:
     api_version: str | None = None
 
 
+@dataclass(frozen=True)
+class MoshiSettings:
+    url: str
+    api_key: str | None
+
+
+@dataclass(frozen=True)
+class PcmGatewaySettings:
+    provider: str
+    url: str
+    api_key: str | None
+    model: str
+    input_sample_rate: int
+    output_sample_rate: int
+    manual_activity: bool
+
+
 def load_settings() -> Settings:
     load_dotenv()
     agent_citizen = AgentConfig(
-        identity=_env("AGENT_CITIZEN_IDENTITY", "AGENT_A_IDENTITY", default="agent-citizen"),
-        provider=_env("AGENT_CITIZEN_PROVIDER", "AGENT_A_PROVIDER", default="openai").lower(),
-        instructions=_env(
+        identity=env_with_legacy("AGENT_CITIZEN_IDENTITY", "AGENT_A_IDENTITY", default="agent-citizen"),
+        provider=_provider_env("AGENT_CITIZEN_PROVIDER", "AGENT_A_PROVIDER", default="openai"),
+        instructions=env_with_legacy(
             "AGENT_CITIZEN_INSTRUCTIONS",
             "AGENT_A_INSTRUCTIONS",
             default="You are Agent-Citizen, representing a human user. Keep replies concise and conversational.",
         ),
     )
     agent_scholar = AgentConfig(
-        identity=_env("AGENT_SCHOLAR_IDENTITY", "AGENT_B_IDENTITY", default="agent-scholar"),
-        provider=_env("AGENT_SCHOLAR_PROVIDER", "AGENT_B_PROVIDER", default="gemini").lower(),
-        instructions=_env(
+        identity=env_with_legacy("AGENT_SCHOLAR_IDENTITY", "AGENT_B_IDENTITY", default="agent-scholar"),
+        provider=_provider_env("AGENT_SCHOLAR_PROVIDER", "AGENT_B_PROVIDER", default="gemini"),
+        instructions=env_with_legacy(
             "AGENT_SCHOLAR_INSTRUCTIONS",
             "AGENT_B_INSTRUCTIONS",
             default="You are Agent-Scholar, the voice agent under test. Keep replies concise and conversational.",
@@ -95,18 +133,30 @@ def load_settings() -> Settings:
     )
     gemini_auth = load_gemini_auth() if _uses_provider("gemini", agent_citizen, agent_scholar) else None
     minicpm_url = (
-        _required("MINICPM_REALTIME_URL")
+        required_env("MINICPM_REALTIME_URL")
         if _uses_provider("minicpm", agent_citizen, agent_scholar)
         else os.getenv("MINICPM_REALTIME_URL")
     )
+    moshi_settings = (
+        load_moshi_settings(required=True)
+        if _uses_provider("moshi", agent_citizen, agent_scholar)
+        else None
+    )
+    pcm_gateways = {
+        provider: gateway
+        for provider in PCM_GATEWAY_PROVIDERS
+        if _uses_provider(provider, agent_citizen, agent_scholar)
+        for gateway in [load_pcm_gateway_settings(provider, required=True)]
+        if gateway is not None
+    }
 
     return Settings(
-        livekit_url=_required("LIVEKIT_URL"),
-        livekit_api_key=_required("LIVEKIT_API_KEY"),
-        livekit_api_secret=_required("LIVEKIT_API_SECRET"),
+        livekit_url=required_env("LIVEKIT_URL"),
+        livekit_api_key=required_env("LIVEKIT_API_KEY"),
+        livekit_api_secret=required_env("LIVEKIT_API_SECRET"),
         livekit_room=os.getenv("LIVEKIT_ROOM", "vox-symposium"),
-        publish_sample_rate=_int_env("LIVEKIT_PUBLISH_SAMPLE_RATE", 48_000),
-        frame_ms=_int_env("LIVEKIT_FRAME_MS", 20),
+        publish_sample_rate=int_env("LIVEKIT_PUBLISH_SAMPLE_RATE", 48_000),
+        frame_ms=int_env("LIVEKIT_FRAME_MS", 20),
         agent_citizen=agent_citizen,
         agent_scholar=agent_scholar,
         openai_api_key=openai_auth.api_key if openai_auth else None,
@@ -127,18 +177,20 @@ def load_settings() -> Settings:
         gemini_model=gemini_live_model(gemini_auth.backend if gemini_auth else "ai_studio"),
         minicpm_realtime_url=minicpm_url,
         minicpm_api_key=os.getenv("MINICPM_API_KEY") or None,
-        minicpm_length_penalty=_float_env("MINICPM_LENGTH_PENALTY", 1.1),
-        minicpm_input_chunk_ms=_int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
-        minicpm_queue_timeout=_float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
+        minicpm_length_penalty=float_env("MINICPM_LENGTH_PENALTY", 1.1),
+        minicpm_input_chunk_ms=int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
+        minicpm_queue_timeout=float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
+        moshi=moshi_settings,
+        pcm_gateways=pcm_gateways,
     )
 
 
 def load_openai_auth() -> OpenAIAuthConfig:
-    backend = os.getenv("OPENAI_BACKEND", "openai").strip().lower().replace("-", "_")
+    backend = normalized_env("OPENAI_BACKEND", "openai")
     if backend in {"openai", "official"}:
         return OpenAIAuthConfig(
             backend="openai",
-            api_key=_required("OPENAI_API_KEY"),
+            api_key=required_env("OPENAI_API_KEY"),
             model=os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2"),
         )
     if backend not in {"azure", "azure_openai"}:
@@ -148,23 +200,23 @@ def load_openai_auth() -> OpenAIAuthConfig:
 
     return OpenAIAuthConfig(
         backend="azure",
-        api_key=_required("AZURE_OPENAI_API_KEY"),
-        endpoint=_required("AZURE_OPENAI_ENDPOINT"),
-        model=_required("AZURE_OPENAI_DEPLOYMENT_NAME"),
+        api_key=required_env("AZURE_OPENAI_API_KEY"),
+        endpoint=required_env("AZURE_OPENAI_ENDPOINT"),
+        model=required_env("AZURE_OPENAI_DEPLOYMENT_NAME"),
         api_version=os.getenv("AZURE_OPENAI_API_VERSION") or None,
     )
 
 
 def load_gemini_auth() -> GeminiAuthConfig:
-    backend = os.getenv("GEMINI_BACKEND", "ai_studio").strip().lower().replace("-", "_")
+    backend = normalized_env("GEMINI_BACKEND", "ai_studio")
     if backend == "ai_studio":
-        return GeminiAuthConfig(backend=backend, api_key=_required("GEMINI_API_KEY"))
+        return GeminiAuthConfig(backend=backend, api_key=required_env("GEMINI_API_KEY"))
     if backend != "vertex":
         raise RuntimeError(
             f"GEMINI_BACKEND must be 'ai_studio' or 'vertex', got {backend!r}"
         )
 
-    credentials_file = _required("GOOGLE_APPLICATION_CREDENTIALS")
+    credentials_file = required_env("GOOGLE_APPLICATION_CREDENTIALS")
     credentials_path = Path(credentials_file).expanduser()
     if not credentials_path.is_file():
         raise RuntimeError(
@@ -172,7 +224,7 @@ def load_gemini_auth() -> GeminiAuthConfig:
         )
     return GeminiAuthConfig(
         backend=backend,
-        project=_required("GOOGLE_CLOUD_PROJECT"),
+        project=required_env("GOOGLE_CLOUD_PROJECT"),
         location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
         credentials_file=str(credentials_path),
     )
@@ -187,8 +239,37 @@ def gemini_live_model(backend: str) -> str:
     return os.getenv("GEMINI_LIVE_MODEL", default)
 
 
-def _env(primary: str, legacy: str, *, default: str) -> str:
-    return os.getenv(primary) or os.getenv(legacy) or default
+def load_moshi_settings(*, required: bool) -> MoshiSettings | None:
+    url = required_env("MOSHI_REALTIME_URL") if required else os.getenv("MOSHI_REALTIME_URL")
+    if not url:
+        return None
+    return MoshiSettings(
+        url=_websocket_url(url, default_path="/api/chat"),
+        api_key=os.getenv("MOSHI_API_KEY") or None,
+    )
+
+
+def load_pcm_gateway_settings(provider: str, *, required: bool) -> PcmGatewaySettings | None:
+    provider = normalize_provider(provider)
+    prefix = provider_env_prefix(provider)
+    url = first_env(_env_names(provider, "REALTIME_URL"))
+    if required and not url:
+        raise RuntimeError(f"Missing required environment variable: {prefix}_REALTIME_URL")
+    if not url:
+        return None
+    return PcmGatewaySettings(
+        provider=provider,
+        url=_websocket_url(url),
+        api_key=first_env(_env_names(provider, "API_KEY")) or None,
+        model=first_env(_env_names(provider, "MODEL")) or provider,
+        input_sample_rate=int_env_any(_env_names(provider, "INPUT_SAMPLE_RATE"), 24_000),
+        output_sample_rate=int_env_any(_env_names(provider, "OUTPUT_SAMPLE_RATE"), 24_000),
+        manual_activity=bool_env_any(_env_names(provider, "MANUAL_ACTIVITY"), False),
+    )
+
+
+def _provider_env(primary: str, legacy: str, *, default: str) -> str:
+    return normalize_provider(env_with_legacy(primary, legacy, default=default))
 
 
 def _apply_scenario_instructions(
@@ -204,9 +285,9 @@ def _apply_scenario_instructions(
     scenario = load_scenario(
         scenario_file,
         scenario_id=os.getenv("SCENARIO_ID"),
-        scenario_index=_optional_int_env("SCENARIO_INDEX"),
+        scenario_index=optional_int_env("SCENARIO_INDEX"),
         audio_dir=os.getenv("SCENARIO_AUDIO_DIR"),
-        dialogue_turns=_int_env("SCENARIO_DIALOGUE_TURNS", 5),
+        dialogue_turns=int_env("SCENARIO_DIALOGUE_TURNS", 5),
     )
     return (
         replace(agent_citizen, instructions=scenario.build_instructions("citizen")),
@@ -215,49 +296,35 @@ def _apply_scenario_instructions(
 
 
 def _uses_provider(provider: str, *agents: AgentConfig) -> bool:
-    return any(agent.provider == provider for agent in agents)
+    return any(normalize_provider(agent.provider) == provider for agent in agents)
 
 
 def _validate_provider(agent: AgentConfig) -> None:
-    if agent.provider not in {"openai", "gemini", "minicpm"}:
+    if normalize_provider(agent.provider) not in SUPPORTED_PROVIDERS:
+        supported = "', '".join(sorted(SUPPORTED_PROVIDERS))
         raise RuntimeError(
-            f"{agent.identity} provider must be 'openai', 'gemini', or 'minicpm', "
+            f"{agent.identity} provider must be one of '{supported}', "
             f"got {agent.provider!r}"
         )
 
 
-def _required(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
+def _env_names(provider: str, suffix: str) -> list[str]:
+    prefix = provider_env_prefix(provider)
+    names = [f"{prefix}_{suffix}"]
+    if provider == "covo_audio_chat_fd":
+        names.append(f"COVO_{suffix}")
+    return names
 
 
-def _int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+def _websocket_url(url: str, *, default_path: str | None = None) -> str:
+    parsed = urlsplit(url)
+    scheme = parsed.scheme
+    if scheme in {"http", "https"}:
+        scheme = "wss" if scheme == "https" else "ws"
+    if scheme not in {"ws", "wss"} or not parsed.netloc:
+        raise RuntimeError(f"Realtime URL must be ws:// or wss://, got {url!r}")
 
-
-def _float_env(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
-
-
-def _optional_int_env(name: str) -> int | None:
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return None
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
+    path = parsed.path
+    if default_path and path in {"", "/"}:
+        path = default_path
+    return urlunsplit((scheme, parsed.netloc, path, parsed.query, parsed.fragment))

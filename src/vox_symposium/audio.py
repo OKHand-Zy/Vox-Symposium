@@ -76,7 +76,7 @@ def pcm16_to_float32(data: bytes) -> bytes:
     """Convert little-endian signed PCM16 bytes to little-endian float32 PCM."""
     samples = _pcm16_array(data)
     floats = array("f", (sample / 32768.0 for sample in samples))
-    if _is_big_endian(floats):
+    if _is_big_endian():
         floats.byteswap()
     return floats.tobytes()
 
@@ -86,7 +86,7 @@ def float32_to_pcm16(data: bytes) -> bytes:
     usable = len(data) - (len(data) % 4)
     samples = array("f")
     samples.frombytes(data[:usable])
-    if _is_big_endian(samples):
+    if _is_big_endian():
         samples.byteswap()
 
     pcm = array("h")
@@ -105,19 +105,19 @@ def _pcm16_array(data: bytes) -> array:
     samples.frombytes(data)
     if samples.itemsize != PCM_SAMPLE_WIDTH_BYTES:
         raise RuntimeError("platform does not expose 16-bit signed shorts")
-    if _is_big_endian(samples):
+    if _is_big_endian():
         samples.byteswap()
     return samples
 
 
 def _array_to_le_bytes(samples: array) -> bytes:
     out = array("h", samples)
-    if _is_big_endian(out):
+    if _is_big_endian():
         out.byteswap()
     return out.tobytes()
 
 
-def _is_big_endian(_samples: array) -> bool:
+def _is_big_endian() -> bool:
     return sys.byteorder == "big"
 
 

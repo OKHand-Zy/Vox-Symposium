@@ -27,7 +27,7 @@ Agent-Scholar model output -> Agent-Scholar LiveKit audio track -> Agent-Citizen
 - Agent-Citizen：代表人類使用者，用來模擬一般人對 Voice Agent 的提問、追問與互動。
 - Agent-Scholar：代表被測試的 Voice Agent，也就是你要觀察、驗證與調整的目標代理。
 
-Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime、Gemini Live 或自架的 MiniCPM-o 4.5 Audio Full-Duplex Gateway。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions。
+Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime、Gemini Live、MiniCPM-o 4.5、Moshi，或透過 PCM gateway 串接 PersonaPlex / Covo-Audio-Chat-FD。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions。
 
 ## 重要資料位置
 
@@ -176,10 +176,12 @@ python3 -m vox_symposium.evaluation \
 
 ```text
 Playing opening from scholar into citizen: data/test/instruct_00000000_9.wav
-Captured citizen turn 1; scholar_turns=0
-Captured scholar turn 2; scholar_turns=1
-Captured citizen turn 3; scholar_turns=1
-Captured scholar turn 4; scholar_turns=2
+Captured citizen turn 1
+Captured scholar turns 1
+Captured citizen turn 2
+Captured scholar turns 2
+Playing evaluation question into scholar: data/question_audio/two_test/question_00000000.wav
+Captured scholar answer evaluation question: data/results/00000000-smoke-artifacts/scholar-answer.wav
 Saved evaluation result: data/results/00000000-smoke.json (...)
 ```
 
@@ -308,6 +310,9 @@ pip install -e .
 - Gemini 使用 AI Studio 時：`GEMINI_API_KEY`
 - Gemini 使用 Vertex AI 時：`GOOGLE_CLOUD_PROJECT`、`GOOGLE_APPLICATION_CREDENTIALS`
 - MiniCPM-o 4.5：`MINICPM_REALTIME_URL`
+- Moshi：`MOSHI_REALTIME_URL`
+- PersonaPlex：`PERSONAPLEX_REALTIME_URL`
+- Covo-Audio-Chat-FD：`COVO_AUDIO_CHAT_FD_REALTIME_URL`
 
 Gemini 預設使用 AI Studio，因此需要 `GEMINI_API_KEY`。若要使用 Vertex AI，改設 `GEMINI_BACKEND=vertex`，並提供 `GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION` 與指向 service account JSON 的 `GOOGLE_APPLICATION_CREDENTIALS`；此時不需要 `GEMINI_API_KEY`。
 
@@ -328,6 +333,9 @@ AGENT_SCHOLAR_INSTRUCTIONS=You are Agent-Scholar, the voice agent under test. Ke
 - `openai`：使用 OpenAI Realtime。
 - `gemini`：使用 Gemini Live。
 - `minicpm`：使用自架 MiniCPM-o 4.5 Audio Full-Duplex Gateway。
+- `moshi`：使用 Kyutai Moshi server `/api/chat` WebSocket。
+- `personaplex`：使用 PersonaPlex PCM JSON gateway。
+- `covo_audio_chat_fd`：使用 Covo-Audio-Chat-FD PCM JSON gateway；也接受 `covo` alias。
 
 例如兩邊都使用 OpenAI：
 
@@ -384,6 +392,40 @@ MINICPM_QUEUE_TIMEOUT=300
 於對方說完後輸出語音，並追加靜音 input chunk 讓模型繼續進行 listen/speak
 決策。模型說話期間會持續以即時速度送入靜音，直到模型回到 `listen`，避免
 full-duplex 生成因沒有後續 input 而中途停止；一般 LiveKit participant 不會加入這項限制。
+
+Moshi 走 Kyutai 官方二進位 WebSocket protocol：Vox 送入/接收 24 kHz mono Opus pages，內部轉回 PCM16。使用前先安裝可選依賴：
+
+```bash
+pip install -e '.[moshi]'
+```
+
+只將 Scholar 換成 Moshi：
+
+```env
+AGENT_CITIZEN_PROVIDER=gemini
+AGENT_SCHOLAR_PROVIDER=moshi
+MOSHI_REALTIME_URL=ws://127.0.0.1:8998/api/chat
+```
+
+若 `MOSHI_REALTIME_URL` 只填 `ws://127.0.0.1:8998`，程式會自動補上 `/api/chat`。
+
+PersonaPlex 與 Covo-Audio-Chat-FD 目前以可控的 PCM JSON gateway 形式串接。你的 model gateway 需要接受 `session.init` 與 `input_audio_buffer.append`，並回傳 base64 PCM16 audio delta；詳細 wire format 請看 [doc/self-hosted-full-duplex-gateways.md](doc/self-hosted-full-duplex-gateways.md)。
+
+```env
+AGENT_CITIZEN_PROVIDER=gemini
+AGENT_SCHOLAR_PROVIDER=personaplex
+PERSONAPLEX_REALTIME_URL=ws://127.0.0.1:8010/v1/realtime
+PERSONAPLEX_MODEL=personaplex
+PERSONAPLEX_INPUT_SAMPLE_RATE=24000
+PERSONAPLEX_OUTPUT_SAMPLE_RATE=24000
+```
+
+```env
+AGENT_CITIZEN_PROVIDER=gemini
+AGENT_SCHOLAR_PROVIDER=covo_audio_chat_fd
+COVO_AUDIO_CHAT_FD_REALTIME_URL=ws://127.0.0.1:8020/v1/realtime
+COVO_AUDIO_CHAT_FD_MODEL=covo_audio_chat_fd
+```
 
 ## 啟動
 
@@ -483,6 +525,25 @@ AGENT_SCHOLAR_PROVIDER=minicpm
 MINICPM_REALTIME_URL=ws://127.0.0.1:8006/v1/realtime?mode=audio
 ```
 
+如果其中一個角色使用 Moshi，加入：
+
+```env
+AGENT_SCHOLAR_PROVIDER=moshi
+MOSHI_REALTIME_URL=ws://127.0.0.1:8998/api/chat
+```
+
+如果其中一個角色使用 PersonaPlex 或 Covo-Audio-Chat-FD gateway，加入：
+
+```env
+AGENT_SCHOLAR_PROVIDER=personaplex
+PERSONAPLEX_REALTIME_URL=ws://127.0.0.1:8010/v1/realtime
+```
+
+```env
+AGENT_SCHOLAR_PROVIDER=covo_audio_chat_fd
+COVO_AUDIO_CHAT_FD_REALTIME_URL=ws://127.0.0.1:8020/v1/realtime
+```
+
 啟動測試：
 
 ```bash
@@ -508,13 +569,18 @@ LIVEKIT_ROOM=test-room
 - OpenAI Realtime input 會被 resample 成 mono 24 kHz PCM。
 - Gemini Live input 會被 resample 成 mono 16 kHz PCM。
 - MiniCPM input 會轉成 mono 16 kHz float32 PCM；output 24 kHz float32 PCM 會轉回 PCM16。
+- Moshi adapter 會把 PCM16 轉成 24 kHz mono Opus pages，並將 Moshi output Opus pages 解回 PCM16。
+- PersonaPlex / Covo-Audio-Chat-FD gateway 預設使用 base64 PCM16 mono input/output，sample rate 預設 24 kHz，可用各自的 `*_INPUT_SAMPLE_RATE` / `*_OUTPUT_SAMPLE_RATE` 調整。
 - Model output 預期為 mono 24 kHz PCM，發布回 LiveKit 前會 resample 成 LiveKit publish sample rate。
 
 ## 擴充其他模型
 
-Provider adapter 放在 `src/vox_symposium/models/`。之後如果要改接 self-hosted full-duplex model，只要實作 `RealtimeAudioModel` 介面，並在 `build_model()` 中註冊新的 provider。
+Provider adapter 放在 `src/vox_symposium/models/`，provider 名稱與 factory 集中在 `src/vox_symposium/providers.py` 與 `src/vox_symposium/models/factory.py`。之後如果要改接 self-hosted full-duplex model，優先新增 profile 或 adapter，再在 factory 中註冊。
 
 如果要使用自己的本地 Hugging Face 即時語音模型，請看 [doc/local-hf-realtime-model.md](doc/local-hf-realtime-model.md)。
+
+自架 PCM gateway protocol 與 PersonaPlex / Covo-Audio-Chat-FD 串接建議請看
+[doc/self-hosted-full-duplex-gateways.md](doc/self-hosted-full-duplex-gateways.md)。
 
 MiniCPM-o 4.5 的完整非 Docker 部署、TorchCodec 安裝、三程序啟動與故障排除請看
 [doc/minicpm-o-4_5-deployment.md](doc/minicpm-o-4_5-deployment.md)。

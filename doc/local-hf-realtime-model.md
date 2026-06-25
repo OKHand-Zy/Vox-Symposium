@@ -2,12 +2,16 @@
 
 這份文件說明如果要把 Vox Symposium 從 OpenAI Realtime / Gemini Live 改接自己的本地 Hugging Face 語音模型，需要把模型放在哪、程式要新增哪個 adapter，以及 `.env` 要怎麼設定。
 
-目前專案內建 provider 只有：
+目前專案內建 provider 包含：
 
 - `openai`：OpenAI Realtime
 - `gemini`：Gemini Live
+- `minicpm`：MiniCPM-o 4.5 Audio Full-Duplex Gateway
+- `moshi`：Kyutai Moshi `/api/chat`
+- `personaplex`：PersonaPlex PCM JSON gateway
+- `covo_audio_chat_fd`：Covo-Audio-Chat-FD PCM JSON gateway
 
-所以本地 Hugging Face 模型不能只靠 `.env` 切換，必須新增一個 provider adapter，實作 `RealtimeAudioModel` 介面，再把它註冊到 `build_model()`。
+如果你的本地 Hugging Face 模型無法包成現有 PCM JSON gateway，才需要新增 provider adapter，實作 `RealtimeAudioModel` 介面，再把它註冊到 `src/vox_symposium/models/factory.py`。
 
 ## 放置位置
 
@@ -180,24 +184,13 @@ local_hf_model_path=(
 local_hf_device=os.getenv("LOCAL_HF_DEVICE", "cuda"),
 ```
 
-`_validate_provider()` 改成允許 `local_hf`：
+`src/vox_symposium/providers.py` 改成允許 `local_hf`：
 
 ```python
-if agent.provider not in {"openai", "gemini", "local_hf"}:
-    raise RuntimeError(
-        f"{agent.identity} provider must be 'openai', 'gemini', or 'local_hf', got {agent.provider!r}"
-    )
+SUPPORTED_PROVIDERS = frozenset({... , "local_hf"})
 ```
 
-接著修改 `src/vox_symposium/livekit_participant.py`。
-
-加入 import：
-
-```python
-from vox_symposium.models.local_hf_realtime import LocalHFRealtimeModel
-```
-
-在 `build_model()` 加上：
+接著修改 `src/vox_symposium/models/factory.py`，在 `build_model_from_settings()` 與 `build_model_from_env()` 中註冊：
 
 ```python
 if provider == "local_hf":
