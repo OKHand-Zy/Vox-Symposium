@@ -9,6 +9,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from vox_symposium.audio import PcmAudio, rechunk_pcm16
 from vox_symposium.models.base import RealtimeAudioModel
@@ -47,6 +48,7 @@ async def run() -> None:
     run_id = args.run_id or result_path.stem
     artifact_dir = Path(args.artifact_dir) if args.artifact_dir else result_path.parent / f"{run_id}-artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    env_snapshot_path = _write_run_env_snapshot(artifact_dir, run_id=run_id, args=args)
 
     citizen = _build_model("citizen", scenario.build_instructions("citizen"))
     scholar = _build_model("scholar", scenario.build_instructions("scholar"))
@@ -140,6 +142,7 @@ async def run() -> None:
             dialogue_log=str(dialogue_log_path),
             run_id=run_id,
         )
+        result["artifacts"]["env_snapshot"] = str(env_snapshot_path)
         write_evaluation_result(result_path, result)
         response = result["response"]
         print(
@@ -510,6 +513,134 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     with path.open("w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=False, indent=2)
         file.write("\n")
+
+
+def _write_run_env_snapshot(artifact_dir: Path, *, run_id: str, args: argparse.Namespace) -> Path:
+    path = artifact_dir / "run-env.txt"
+    lines = [
+        "# Vox Symposium evaluation environment snapshot.",
+        "# Secrets such as API keys and API secrets are intentionally omitted.",
+        "# Values reflect the process environment after .env loading and runner defaults.",
+        "",
+        f"RUN_ID={_env_value(run_id)}",
+        f"SCENARIO={_env_value(args.scenario)}",
+        f"RESULT={_env_value(args.result)}",
+        f"DIALOGUE_TURNS={args.dialogue_turns}",
+        f"AUDIO_SPEED={args.audio_speed}",
+        f"FRAME_MS={args.frame_ms}",
+        "",
+    ]
+
+    for agent in ("citizen", "scholar"):
+        lines.extend(_agent_env_snapshot(agent))
+        lines.append("")
+
+    lines.extend(_provider_env_snapshot())
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    print(f"Saved environment snapshot: {path}")
+    return path
+
+
+def _agent_env_snapshot(agent: str) -> list[str]:
+    legacy_agent = "A" if agent == "citizen" else "B"
+    prefix = f"AGENT_{agent.upper()}"
+    provider = _env(f"{prefix}_PROVIDER", f"AGENT_{legacy_agent}_PROVIDER", default=_default_provider(agent)).lower()
+    identity = _env(
+        f"{prefix}_IDENTITY",
+        f"AGENT_{legacy_agent}_IDENTITY",
+        default=f"agent-{agent}",
+    )
+    model, backend, extra = _effective_model_snapshot(provider)
+    lines = [
+        f"{prefix}_IDENTITY={_env_value(identity)}",
+        f"{prefix}_PROVIDER={_env_value(provider)}",
+        f"{prefix}_MODEL={_env_value(model)}",
+    ]
+    if backend:
+        lines.append(f"{prefix}_BACKEND={_env_value(backend)}")
+    lines.extend(f"{prefix}_{key}={_env_value(value)}" for key, value in extra.items())
+    return lines
+
+
+def _effective_model_snapshot(provider: str) -> tuple[str, str | None, dict[str, str]]:
+    if provider == "openai":
+        backend = _normalized_env("OPENAI_BACKEND", "openai")
+        if backend in {"azure", "azure_openai"}:
+            return os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", ""), "azure", {}
+        return os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2"), "openai", {
+            "VOICE": os.getenv("OPENAI_REALTIME_VOICE", "marin"),
+        }
+    if provider == "gemini":
+        backend = _normalized_env("GEMINI_BACKEND", "ai_studio")
+        return _gemini_live_model_default(backend), backend, {}
+    if provider == "minicpm":
+        return os.getenv("MINICPM_REALTIME_MODEL", "minicpm-realtime-gateway"), None, {}
+    return "", None, {}
+
+
+def _provider_env_snapshot() -> list[str]:
+    lines = [
+        "OPENAI_BACKEND=" + _env_value(_normalized_env("OPENAI_BACKEND", "openai")),
+        "OPENAI_REALTIME_MODEL=" + _env_value(os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")),
+        "OPENAI_REALTIME_VOICE=" + _env_value(os.getenv("OPENAI_REALTIME_VOICE", "marin")),
+        "AZURE_OPENAI_DEPLOYMENT_NAME=" + _env_value(os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "")),
+        "AZURE_OPENAI_ENDPOINT=" + _env_value(os.getenv("AZURE_OPENAI_ENDPOINT", "")),
+        "AZURE_OPENAI_API_VERSION=" + _env_value(os.getenv("AZURE_OPENAI_API_VERSION", "")),
+        "",
+        "GEMINI_BACKEND=" + _env_value(_normalized_env("GEMINI_BACKEND", "ai_studio")),
+        "GEMINI_LIVE_MODEL=" + _env_value(_gemini_live_model_default(_normalized_env("GEMINI_BACKEND", "ai_studio"))),
+        "GOOGLE_CLOUD_PROJECT=" + _env_value(os.getenv("GOOGLE_CLOUD_PROJECT", "")),
+        "GOOGLE_CLOUD_LOCATION=" + _env_value(os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")),
+        "",
+        "MINICPM_REALTIME_MODEL=" + _env_value(os.getenv("MINICPM_REALTIME_MODEL", "minicpm-realtime-gateway")),
+        "MINICPM_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("MINICPM_REALTIME_URL", ""))),
+        "MINICPM_LENGTH_PENALTY=" + _env_value(os.getenv("MINICPM_LENGTH_PENALTY", "1.1")),
+        "MINICPM_INPUT_CHUNK_MS=" + _env_value(os.getenv("MINICPM_INPUT_CHUNK_MS", "1000")),
+        "MINICPM_QUEUE_TIMEOUT=" + _env_value(os.getenv("MINICPM_QUEUE_TIMEOUT", "300.0")),
+    ]
+    return lines
+
+
+def _gemini_live_model_default(backend: str) -> str:
+    default = (
+        "gemini-live-2.5-flash-native-audio"
+        if backend == "vertex"
+        else "gemini-3.1-flash-live-preview"
+    )
+    return os.getenv("GEMINI_LIVE_MODEL", default)
+
+
+def _normalized_env(name: str, default: str) -> str:
+    return os.getenv(name, default).strip().lower().replace("-", "_")
+
+
+def _env_value(value: object) -> str:
+    text = str(value)
+    if text == "" or any(character.isspace() or character in {'"', "'", "#", "="} for character in text):
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return text
+
+
+def _redacted_url(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return value
+
+    netloc = parsed.netloc
+    if "@" in netloc:
+        netloc = f"***@{netloc.rsplit('@', 1)[1]}"
+
+    query = urlencode(
+        [
+            (key, "***" if any(secret in key.lower() for secret in ("key", "token", "secret", "password")) else val)
+            for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+        ],
+        safe="*",
+    )
+    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
 
 
 def _drain_queue(queue: asyncio.Queue[str | None]) -> None:

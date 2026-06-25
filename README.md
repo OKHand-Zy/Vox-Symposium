@@ -224,9 +224,11 @@ data/results/00000000-auto001-artifacts/
   question.wav
   scholar-answer.wav
   dialogue-log.json
+  run-env.txt
 ```
 
 `dialogue-log.json` 會在每個 `dialogue_turn` / `evaluation_answer` event 中同時保存 `text` 和 `audio`，讓一段回合文字能直接對應到同一筆紀錄的 WAV 檔。
+`run-env.txt` 會保存本次 evaluation 實際使用的 agent provider、backend、model/deployment、voice 和非敏感 provider 參數；API key 與 secret 不會寫入 artifacts。
 
 result 會保存：
 
@@ -244,6 +246,10 @@ result 會保存：
     "audio": "data/results/00000000-auto001-artifacts/scholar-answer.wav",
     "choice": null,
     "is_correct": null
+  },
+  "artifacts": {
+    "dialogue_log": "data/results/00000000-auto001-artifacts/dialogue-log.json",
+    "env_snapshot": "data/results/00000000-auto001-artifacts/run-env.txt"
   }
 }
 ```
