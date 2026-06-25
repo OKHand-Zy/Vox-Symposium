@@ -276,7 +276,7 @@ def extract_answer_choice(response_text: str, choices: list[str]) -> str | None:
     return None
 
 
-def write_evaluation_result(path: str | Path, result: dict[str, Any]) -> None:
+def write_evaluation_result(path: str | Path, result: dict[str, Any] | list[dict[str, Any]]) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as file:

@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 import wave
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from vox_symposium.audio import PcmAudio, rechunk_pcm16
@@ -18,8 +23,9 @@ from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.models.factory import build_model_from_env
 from vox_symposium.recording import RecordedAudio, audio_event_fields, write_wav
 from vox_symposium.scenario import (
+    LoadedScenario,
     build_evaluation_result,
-    load_scenario,
+    load_scenarios,
     write_evaluation_result,
 )
 from vox_symposium.providers import normalize_provider
@@ -40,21 +46,136 @@ class AudioUtterance:
 async def run() -> None:
     load_dotenv()
     args = _parse_args()
-    scenario = load_scenario(
-        args.scenario,
+    result_path = Path(args.result)
+    base_run_id = args.run_id or result_path.stem
+    artifact_root = Path(args.artifact_dir) if args.artifact_dir else result_path.parent / f"{base_run_id}-artifacts"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    console_log_path = artifact_root / "console-log.txt"
+    summary_path = artifact_root / "summary.json"
+
+    with _tee_console(console_log_path):
+        print(f"Saving console log: {console_log_path}")
+        print(f"Command: {_format_command(sys.argv)}")
+        try:
+            await _run_evaluations(
+                args,
+                result_path=result_path,
+                base_run_id=base_run_id,
+                artifact_root=artifact_root,
+                console_log_path=console_log_path,
+                summary_path=summary_path,
+            )
+        except Exception as exc:
+            print(_format_error(exc), file=sys.stderr)
+            setattr(exc, "_vox_console_logged", True)
+            raise
+
+
+async def _run_evaluations(
+    args: argparse.Namespace,
+    *,
+    result_path: Path,
+    base_run_id: str,
+    artifact_root: Path,
+    console_log_path: Path,
+    summary_path: Path,
+) -> None:
+    scenarios = [
+        LoadedScenario(data)
+        for data in load_scenarios(
+            args.scenario,
+            scenario_id=args.scenario_id,
+            scenario_index=args.scenario_index,
+            audio_dir=args.audio_dir,
+            dialogue_turns=args.dialogue_turns,
+        )
+    ]
+    scenarios = _limit_scenarios(
+        scenarios,
+        limit=args.limit,
         scenario_id=args.scenario_id,
         scenario_index=args.scenario_index,
-        audio_dir=args.audio_dir,
-        dialogue_turns=args.dialogue_turns,
     )
+    if not scenarios:
+        raise RuntimeError("No scenarios found")
+    if (args.scenario_id is not None or args.scenario_index is not None) and len(scenarios) != 1:
+        raise RuntimeError(f"Expected exactly one scenario, got {len(scenarios)}")
 
-    result_path = Path(args.result)
-    run_id = args.run_id or result_path.stem
-    artifact_root = Path(args.artifact_dir) if args.artifact_dir else result_path.parent / f"{run_id}-artifacts"
-    artifact_root.mkdir(parents=True, exist_ok=True)
+    env_snapshot_path = _write_run_env_snapshot(artifact_root, run_id=base_run_id, args=args)
+
+    results: list[dict[str, Any]] = []
+    total = len(scenarios)
+    if total > 1 and args.answer_audio:
+        raise RuntimeError("--answer-audio can only be used when one scenario is selected with --id or --index")
+
+    _write_summary_report(
+        summary_path,
+        results,
+        run_id=base_run_id,
+        scenario_path=args.scenario,
+        result_path=result_path,
+        artifact_root=artifact_root,
+        env_snapshot_path=env_snapshot_path,
+        console_log_path=console_log_path,
+        total_cases=total,
+    )
+    print("==========")
+    for index, scenario in enumerate(scenarios):
+        run_id = _scenario_run_id(base_run_id, scenario.data, index=index, total=total)
+        if index > 0:
+            print("----------")
+        if total > 1:
+            print(f"Running scenario {index + 1}/{total}: {scenario.id} (run_id={run_id})")
+
+        result = await _run_scenario_evaluation(
+            args,
+            scenario=scenario,
+            run_id=run_id,
+            artifact_root=artifact_root,
+            env_snapshot_path=env_snapshot_path,
+        )
+        result["artifacts"]["console_log"] = str(console_log_path)
+        result["artifacts"]["summary"] = str(summary_path)
+        results.append(result)
+        write_evaluation_result(result_path, _result_payload(results, total=total))
+        _write_summary_report(
+            summary_path,
+            results,
+            run_id=base_run_id,
+            scenario_path=args.scenario,
+            result_path=result_path,
+            artifact_root=artifact_root,
+            env_snapshot_path=env_snapshot_path,
+            console_log_path=console_log_path,
+            total_cases=total,
+        )
+        response = result["response"]
+        if total == 1:
+            print(
+                "Saved evaluation result: "
+                f"{result_path} "
+                f"(choice={response['choice'] or 'unknown'}, "
+                f"is_correct={response['is_correct']})"
+            )
+        else:
+            print(
+                "Saved evaluation result batch: "
+                f"{result_path} ({index + 1}/{total}, "
+                f"choice={response['choice'] or 'unknown'}, "
+                f"is_correct={response['is_correct']})"
+            )
+
+
+async def _run_scenario_evaluation(
+    args: argparse.Namespace,
+    *,
+    scenario: LoadedScenario,
+    run_id: str,
+    artifact_root: Path,
+    env_snapshot_path: Path,
+) -> dict[str, Any]:
     artifact_dir = _scenario_artifact_dir(artifact_root, scenario.data)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    env_snapshot_path = _write_run_env_snapshot(artifact_root, run_id=run_id, args=args)
 
     citizen = _build_model("citizen", scenario.build_instructions("citizen"))
     scholar = _build_model("scholar", scenario.build_instructions("scholar"))
@@ -152,15 +273,15 @@ async def run() -> None:
             run_id=run_id,
         )
         result["artifacts"]["env_snapshot"] = str(env_snapshot_path)
-        write_evaluation_result(result_path, result)
         response = result["response"]
         print(
-            "Saved evaluation result: "
-            f"{result_path} "
+            "Completed evaluation scenario: "
+            f"{scenario.id} "
             f"(choice={response['choice'] or 'unknown'}, "
             f"is_correct={response['is_correct']}, "
             f"answer_audio={answer_audio})"
         )
+        return result
     finally:
         for task in reader_tasks:
             task.cancel()
@@ -171,9 +292,13 @@ def main() -> None:
     try:
         asyncio.run(run())
     except RuntimeError as exc:
-        raise SystemExit(f"Error: {exc}") from exc
+        if getattr(exc, "_vox_console_logged", False):
+            raise SystemExit(1) from exc
+        raise SystemExit(_format_error(exc)) from exc
     except Exception as exc:
-        raise SystemExit(f"Error: {type(exc).__name__}: {exc}") from exc
+        if getattr(exc, "_vox_console_logged", False):
+            raise SystemExit(1) from exc
+        raise SystemExit(_format_error(exc)) from exc
 
 
 async def _play_opening(
@@ -486,6 +611,115 @@ def _scenario_artifact_dir(artifact_root: Path, scenario: dict[str, Any]) -> Pat
     return artifact_root / _safe_path_segment(_scenario_row_id(scenario))
 
 
+def _scenario_run_id(base_run_id: str, scenario: dict[str, Any], *, index: int, total: int) -> str:
+    if total == 1:
+        return base_run_id
+    return f"{base_run_id}-{index + 1:04d}-{_safe_path_segment(_scenario_row_id(scenario))}"
+
+
+def _limit_scenarios(
+    scenarios: list[LoadedScenario],
+    *,
+    limit: int | None,
+    scenario_id: str | None,
+    scenario_index: int | None,
+) -> list[LoadedScenario]:
+    if limit is None:
+        return scenarios
+    if limit < 1:
+        raise RuntimeError("--limit must be at least 1")
+    if scenario_id is not None or scenario_index is not None:
+        raise RuntimeError("--limit cannot be used with --id or --index")
+    return scenarios[:limit]
+
+
+def _result_payload(results: list[dict[str, Any]], *, total: int) -> dict[str, Any] | list[dict[str, Any]]:
+    if total == 1:
+        return results[0]
+    return results
+
+
+def _summary_report(
+    results: list[dict[str, Any]],
+    *,
+    run_id: str,
+    scenario_path: str,
+    result_path: Path,
+    artifact_root: Path,
+    env_snapshot_path: Path,
+    console_log_path: Path,
+    total_cases: int | None = None,
+) -> dict[str, Any]:
+    cases = [_summary_case(index, result) for index, result in enumerate(results)]
+    passed = sum(1 for case in cases if case["status"] == "passed")
+    failed = sum(1 for case in cases if case["status"] == "failed")
+    unknown = sum(1 for case in cases if case["status"] == "unknown")
+    completed = len(cases)
+    total = total_cases if total_cases is not None else completed
+    return {
+        "run_id": run_id,
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "scenario": scenario_path,
+        "result": str(result_path),
+        "artifact_root": str(artifact_root),
+        "env_snapshot": str(env_snapshot_path),
+        "console_log": str(console_log_path),
+        "total_cases": total,
+        "completed_cases": completed,
+        "passed_cases": passed,
+        "failed_cases": failed,
+        "unknown_cases": unknown,
+        "pass_rate": passed / total if total else None,
+        "completed_pass_rate": passed / completed if completed else None,
+        "cases": cases,
+    }
+
+
+def _summary_case(index: int, result: dict[str, Any]) -> dict[str, Any]:
+    response = result.get("response") or {}
+    evaluation = result.get("evaluation") or {}
+    artifacts = result.get("artifacts") or {}
+    is_correct = response.get("is_correct")
+    status = "passed" if is_correct is True else "failed" if is_correct is False else "unknown"
+    return {
+        "index": index,
+        "scenario_id": result.get("scenario_id"),
+        "run_id": result.get("run_id"),
+        "status": status,
+        "is_correct": is_correct,
+        "choice": response.get("choice"),
+        "correct_answer": evaluation.get("correct_answer"),
+        "response_text": response.get("text"),
+        "response_audio": response.get("audio"),
+        "dialogue_log": artifacts.get("dialogue_log"),
+    }
+
+
+def _write_summary_report(
+    path: Path,
+    results: list[dict[str, Any]],
+    *,
+    run_id: str,
+    scenario_path: str,
+    result_path: Path,
+    artifact_root: Path,
+    env_snapshot_path: Path,
+    console_log_path: Path,
+    total_cases: int | None = None,
+) -> None:
+    report = _summary_report(
+        results,
+        run_id=run_id,
+        scenario_path=scenario_path,
+        result_path=result_path,
+        artifact_root=artifact_root,
+        env_snapshot_path=env_snapshot_path,
+        console_log_path=console_log_path,
+        total_cases=total_cases,
+    )
+    _write_json(path, report)
+
+
 def _scenario_row_id(scenario: dict[str, Any]) -> str:
     source = scenario.get("source") or {}
     value = scenario.get("row_id") or source.get("row_id") or source.get("raw_id") or scenario.get("id")
@@ -497,13 +731,53 @@ def _safe_path_segment(value: str) -> str:
     return cleaned.strip(".-") or "row"
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    import json
 
     with path.open("w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=False, indent=2)
         file.write("\n")
+
+
+class _TeeStream:
+    def __init__(self, *streams: TextIO) -> None:
+        self._streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self._streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+    def isatty(self) -> bool:
+        return any(stream.isatty() for stream in self._streams)
+
+    @property
+    def encoding(self) -> str:
+        return getattr(self._streams[0], "encoding", None) or "utf-8"
+
+
+@contextmanager
+def _tee_console(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        stdout = _TeeStream(sys.stdout, file)
+        stderr = _TeeStream(sys.stderr, file)
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            yield
+
+
+def _format_command(argv: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in argv)
+
+
+def _format_error(exc: Exception) -> str:
+    if isinstance(exc, RuntimeError):
+        return f"Error: {exc}"
+    return f"Error: {type(exc).__name__}: {exc}"
 
 
 def _write_run_env_snapshot(artifact_dir: Path, *, run_id: str, args: argparse.Namespace) -> Path:
@@ -517,6 +791,7 @@ def _write_run_env_snapshot(artifact_dir: Path, *, run_id: str, args: argparse.N
         f"SCENARIO={_env_value(args.scenario)}",
         f"RESULT={_env_value(args.result)}",
         f"DIALOGUE_TURNS={args.dialogue_turns}",
+        f"LIMIT={_env_value(args.limit or '')}",
         f"AUDIO_SPEED={args.audio_speed}",
         f"FRAME_MS={args.frame_ms}",
         "",
@@ -682,11 +957,12 @@ def _default_provider(agent: str) -> str:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run one automated Vox Symposium scenario evaluation.")
-    parser.add_argument("scenario", help="Normalized scenario JSON path, or source dataset with --id/--index.")
+    parser = argparse.ArgumentParser(description="Run automated Vox Symposium scenario evaluations.")
+    parser.add_argument("scenario", help="Normalized scenario JSON path, or source dataset.")
     parser.add_argument("result", help="Output evaluation result JSON path.")
     parser.add_argument("--id", dest="scenario_id", help="Select a scenario by id when scenario is a dataset.")
     parser.add_argument("--index", dest="scenario_index", type=int, help="Select a scenario by zero-based index.")
+    parser.add_argument("--limit", type=int, help="Run only the first N scenarios when scenario is a dataset.")
     parser.add_argument("--audio-dir", help="Directory containing original speech wav files.")
     parser.add_argument("--dialogue-turns", type=int, default=5, help="Scholar turns before evaluation.")
     parser.add_argument(
