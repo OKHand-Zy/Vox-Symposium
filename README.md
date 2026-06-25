@@ -181,7 +181,7 @@ Captured scholar turns 1
 Captured citizen turn 2
 Captured scholar turns 2
 Playing evaluation question into scholar: data/question_audio/two_test/question_00000000.wav
-Captured scholar answer evaluation question: data/results/00000000-smoke-artifacts/scholar-answer.wav
+Captured scholar answer evaluation question: data/results/00000000-smoke-artifacts/00000000/scholar-answer.wav
 Saved evaluation result: data/results/00000000-smoke.json (...)
 ```
 
@@ -220,14 +220,17 @@ data/results/00000000-auto001.json
 
 ```text
 data/results/00000000-auto001-artifacts/
-  dialogue-01-citizen.wav
-  dialogue-02-scholar.wav
-  ...
-  question.wav
-  scholar-answer.wav
-  dialogue-log.json
   run-env.txt
+  00000000/
+    dialogue-01-citizen.wav
+    dialogue-02-scholar.wav
+    ...
+    question.wav
+    scholar-answer.wav
+    dialogue-log.json
 ```
+
+每筆測試的 log 和音檔會放在該次 run artifacts 目錄底下的 `<row_id>/` 子資料夾；資料沒有 `row_id` 時會使用 scenario `id`。`run-env.txt` 只會在該次 run artifacts 根目錄保存一份。
 
 `dialogue-log.json` 會在每個 `dialogue_turn` / `evaluation_answer` event 中同時保存 `text` 和 `audio`，讓一段回合文字能直接對應到同一筆紀錄的 WAV 檔。
 `run-env.txt` 會保存本次 evaluation 實際使用的 agent provider、backend、model/deployment、voice 和非敏感 provider 參數；API key 與 secret 不會寫入 artifacts。
@@ -245,12 +248,12 @@ result 會保存：
   },
   "response": {
     "text": "",
-    "audio": "data/results/00000000-auto001-artifacts/scholar-answer.wav",
+    "audio": "data/results/00000000-auto001-artifacts/00000000/scholar-answer.wav",
     "choice": null,
     "is_correct": null
   },
   "artifacts": {
-    "dialogue_log": "data/results/00000000-auto001-artifacts/dialogue-log.json",
+    "dialogue_log": "data/results/00000000-auto001-artifacts/00000000/dialogue-log.json",
     "env_snapshot": "data/results/00000000-auto001-artifacts/run-env.txt"
   }
 }

@@ -50,9 +50,11 @@ async def run() -> None:
 
     result_path = Path(args.result)
     run_id = args.run_id or result_path.stem
-    artifact_dir = Path(args.artifact_dir) if args.artifact_dir else result_path.parent / f"{run_id}-artifacts"
+    artifact_root = Path(args.artifact_dir) if args.artifact_dir else result_path.parent / f"{run_id}-artifacts"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    artifact_dir = _scenario_artifact_dir(artifact_root, scenario.data)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    env_snapshot_path = _write_run_env_snapshot(artifact_dir, run_id=run_id, args=args)
+    env_snapshot_path = _write_run_env_snapshot(artifact_root, run_id=run_id, args=args)
 
     citizen = _build_model("citizen", scenario.build_instructions("citizen"))
     scholar = _build_model("scholar", scenario.build_instructions("scholar"))
@@ -478,6 +480,21 @@ def _read_wav(path: Path) -> PcmAudio:
 
 def _write_wav(path: Path, audio: PcmAudio) -> RecordedAudio:
     return write_wav(path, audio)
+
+
+def _scenario_artifact_dir(artifact_root: Path, scenario: dict[str, Any]) -> Path:
+    return artifact_root / _safe_path_segment(_scenario_row_id(scenario))
+
+
+def _scenario_row_id(scenario: dict[str, Any]) -> str:
+    source = scenario.get("source") or {}
+    value = scenario.get("row_id") or source.get("row_id") or source.get("raw_id") or scenario.get("id")
+    return str(value or "row")
+
+
+def _safe_path_segment(value: str) -> str:
+    cleaned = "".join(character if character.isalnum() or character in {"-", "_", "."} else "-" for character in value)
+    return cleaned.strip(".-") or "row"
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

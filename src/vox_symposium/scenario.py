@@ -85,6 +85,7 @@ def normalize_scenario(
         return record
 
     scenario_id = str(record["id"])
+    row_id = str(record.get("row_id") or scenario_id)
     human_name = str(record.get("human") or _name_from_profile(record.get("character_1", "")))
     gpt_name = str(record.get("gpt") or _name_from_profile(record.get("system", "")))
     profiles = [record.get("system", ""), record.get("character_1", ""), record.get("character_2", "")]
@@ -104,6 +105,7 @@ def normalize_scenario(
         "source": {
             "format": "two_test",
             "raw_id": scenario_id,
+            "row_id": row_id,
         },
         "agents": {
             "citizen": {
