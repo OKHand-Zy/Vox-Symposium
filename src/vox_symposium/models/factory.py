@@ -12,7 +12,12 @@ from vox_symposium.config import (
 )
 from vox_symposium.env import float_env, int_env, required_env
 from vox_symposium.models.base import RealtimeAudioModel
-from vox_symposium.providers import PCM_GATEWAY_PROVIDERS, normalize_provider, provider_label
+from vox_symposium.providers import (
+    MOSHI_PROTOCOL_PROVIDERS,
+    PCM_GATEWAY_PROVIDERS,
+    normalize_provider,
+    provider_label,
+)
 
 if TYPE_CHECKING:
     from vox_symposium.config import AgentConfig, PcmGatewaySettings, Settings
@@ -74,14 +79,20 @@ def build_model_from_settings(
             evaluation_turn_taking=evaluation_mode,
         )
 
-    if provider == "moshi":
-        if settings.moshi is None:
+    if provider in MOSHI_PROTOCOL_PROVIDERS:
+        if provider not in settings.moshi_protocols:
             raise RuntimeError(
-                "MOSHI_REALTIME_URL is required when a participant uses provider=moshi"
+                f"{provider_label(provider)} realtime URL is required when a participant uses "
+                f"provider={provider}"
             )
         from vox_symposium.models.moshi_realtime import MoshiRealtimeModel
 
-        return MoshiRealtimeModel(url=settings.moshi.url, api_key=settings.moshi.api_key)
+        protocol_settings = settings.moshi_protocols[provider]
+        return MoshiRealtimeModel(
+            url=protocol_settings.url,
+            api_key=protocol_settings.api_key,
+            text_prompt=agent.instructions,
+        )
 
     if provider in PCM_GATEWAY_PROVIDERS:
         try:
@@ -146,13 +157,19 @@ def build_model_from_env(
             evaluation_turn_taking=evaluation_mode,
         )
 
-    if provider == "moshi":
+    if provider in MOSHI_PROTOCOL_PROVIDERS:
         from vox_symposium.models.moshi_realtime import MoshiRealtimeModel
 
-        settings = load_moshi_settings(required=True)
+        settings = load_moshi_settings(provider, required=True)
         if settings is None:
-            raise RuntimeError("MOSHI_REALTIME_URL is required when provider=moshi")
-        return MoshiRealtimeModel(url=settings.url, api_key=settings.api_key)
+            raise RuntimeError(
+                f"{provider_label(provider)} realtime URL is required when provider={provider}"
+            )
+        return MoshiRealtimeModel(
+            url=settings.url,
+            api_key=settings.api_key,
+            text_prompt=instructions,
+        )
 
     if provider in PCM_GATEWAY_PROVIDERS:
         gateway = load_pcm_gateway_settings(provider, required=True)

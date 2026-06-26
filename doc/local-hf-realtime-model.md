@@ -8,7 +8,7 @@
 - `gemini`：Gemini Live
 - `minicpm`：MiniCPM-o 4.5 Audio Full-Duplex Gateway
 - `moshi`：Kyutai Moshi `/api/chat`
-- `personaplex`：PersonaPlex PCM JSON gateway
+- `personaplex`：PersonaPlex live server 的 Moshi `/api/chat`
 - `covo_audio_chat_fd`：Covo-Audio-Chat-FD PCM JSON gateway
 
 如果你的本地 Hugging Face 模型無法包成現有 PCM JSON gateway，才需要新增 provider adapter，實作 `RealtimeAudioModel` 介面，再把它註冊到 `src/vox_symposium/models/factory.py`。

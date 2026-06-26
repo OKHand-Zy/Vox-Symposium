@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from websockets.asyncio.client import ClientConnection, connect
 
@@ -25,8 +25,11 @@ class MoshiRealtimeModel(QueueBackedRealtimeAudioModel):
         *,
         url: str,
         api_key: str | None = None,
+        text_prompt: str | None = None,
     ) -> None:
         super().__init__()
+        if text_prompt is not None:
+            url = moshi_url_with_text_prompt(url, text_prompt)
         _validate_moshi_url(url)
         self.url = url
         self.api_key = api_key
@@ -44,6 +47,7 @@ class MoshiRealtimeModel(QueueBackedRealtimeAudioModel):
             additional_headers=headers,
             max_size=None,
         )
+        await self._wait_for_handshake()
         self._reader_task = asyncio.create_task(self._read_loop(), name="moshi-reader")
 
     async def send_audio(self, audio: PcmAudio) -> None:
@@ -90,41 +94,55 @@ class MoshiRealtimeModel(QueueBackedRealtimeAudioModel):
 
     async def _read_loop(self) -> None:
         assert self._ws is not None
-        assert self._opus_reader is not None
         try:
             async for raw in self._ws:
-                if not isinstance(raw, bytes) or not raw:
-                    continue
-                kind = raw[0]
-                payload = raw[1:]
-                if kind == 0:
-                    continue
-                if kind == 1:
-                    pcm = self._opus_reader.append_bytes(payload)
-                    if pcm is not None and len(pcm) > 0:
-                        await self._audio_out.put(
-                            PcmAudio(
-                                data=self._float32_array_to_pcm16(pcm),
-                                sample_rate=self.output_sample_rate,
-                                channels=1,
-                            )
-                        )
-                elif kind in {2, 7}:
-                    text_payload = payload[1:] if kind == 7 and payload else payload
-                    text = text_payload.decode("utf-8", errors="replace")
-                    if text:
-                        await self._text_out.put(text)
-                elif kind == 5:
-                    raise RuntimeError(
-                        "Moshi realtime error: "
-                        f"{payload.decode('utf-8', errors='replace')}"
-                    )
+                await self._handle_raw_message(raw)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Moshi realtime reader stopped with an error")
         finally:
             self.close_output_streams()
+
+    async def _wait_for_handshake(self) -> None:
+        if self._ws is None:
+            raise RuntimeError("Moshi realtime websocket is not connected")
+        try:
+            raw = await asyncio.wait_for(self._ws.recv(), timeout=120)
+        except TimeoutError as exc:
+            raise RuntimeError("Timed out waiting for Moshi realtime handshake") from exc
+        if isinstance(raw, bytes) and raw and raw[0] == 0:
+            return
+        await self._handle_raw_message(raw)
+
+    async def _handle_raw_message(self, raw: str | bytes) -> None:
+        assert self._opus_reader is not None
+        if not isinstance(raw, bytes) or not raw:
+            return
+        kind = raw[0]
+        payload = raw[1:]
+        if kind == 0:
+            return
+        if kind == 1:
+            pcm = self._opus_reader.append_bytes(payload)
+            if pcm is not None and len(pcm) > 0:
+                await self._audio_out.put(
+                    PcmAudio(
+                        data=self._float32_array_to_pcm16(pcm),
+                        sample_rate=self.output_sample_rate,
+                        channels=1,
+                    )
+                )
+        elif kind in {2, 7}:
+            text_payload = payload[1:] if kind == 7 and payload else payload
+            text = text_payload.decode("utf-8", errors="replace")
+            if text:
+                await self._text_out.put(text)
+        elif kind == 5:
+            raise RuntimeError(
+                "Moshi realtime error: "
+                f"{payload.decode('utf-8', errors='replace')}"
+            )
 
     def _pcm16_to_float32(self, pcm: bytes):
         samples = self._np.frombuffer(pcm, dtype="<i2").astype(self._np.float32)
@@ -144,3 +162,22 @@ def _validate_moshi_url(url: str) -> None:
             "Moshi realtime URL cannot use a wildcard address; "
             "use 127.0.0.1, a host name, or the server IP"
         )
+
+
+def moshi_url_with_text_prompt(url: str, text_prompt: str) -> str:
+    parsed = urlsplit(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key != "text_prompt"
+    ]
+    query.append(("text_prompt", text_prompt))
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )

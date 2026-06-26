@@ -480,14 +480,17 @@ async def _collect_text_after_audio(queue: asyncio.Queue[str | None]) -> str:
 
 
 def _build_model(agent: str, instructions: str) -> RealtimeAudioModel:
-    provider = normalize_provider(
+    return build_model_from_env(_agent_provider(agent), instructions, evaluation_mode=True)
+
+
+def _agent_provider(agent: str) -> str:
+    return normalize_provider(
         env_with_legacy(
             f"AGENT_{agent.upper()}_PROVIDER",
             f"AGENT_{'A' if agent == 'citizen' else 'B'}_PROVIDER",
             default=_default_provider(agent),
         )
     )
-    return build_model_from_env(provider, instructions, evaluation_mode=True)
 
 
 def _question_audio(
@@ -853,10 +856,8 @@ def _effective_model_snapshot(provider: str) -> tuple[str, str | None, dict[str,
             "REALTIME_URL": _redacted_url(os.getenv("MOSHI_REALTIME_URL", "")),
         }
     if provider == "personaplex":
-        return os.getenv("PERSONAPLEX_MODEL", "personaplex"), "pcm_gateway", {
+        return os.getenv("PERSONAPLEX_MODEL", "personaplex"), "moshi", {
             "REALTIME_URL": _redacted_url(os.getenv("PERSONAPLEX_REALTIME_URL", "")),
-            "INPUT_SAMPLE_RATE": os.getenv("PERSONAPLEX_INPUT_SAMPLE_RATE", "24000"),
-            "OUTPUT_SAMPLE_RATE": os.getenv("PERSONAPLEX_OUTPUT_SAMPLE_RATE", "24000"),
         }
     if provider == "covo_audio_chat_fd":
         return (
@@ -896,8 +897,6 @@ def _provider_env_snapshot() -> list[str]:
         "",
         "PERSONAPLEX_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("PERSONAPLEX_REALTIME_URL", ""))),
         "PERSONAPLEX_MODEL=" + _env_value(os.getenv("PERSONAPLEX_MODEL", "personaplex")),
-        "PERSONAPLEX_INPUT_SAMPLE_RATE=" + _env_value(os.getenv("PERSONAPLEX_INPUT_SAMPLE_RATE", "24000")),
-        "PERSONAPLEX_OUTPUT_SAMPLE_RATE=" + _env_value(os.getenv("PERSONAPLEX_OUTPUT_SAMPLE_RATE", "24000")),
         "",
         "COVO_AUDIO_CHAT_FD_REALTIME_URL=" + _env_value(_redacted_url(_covo_env("REALTIME_URL", ""))),
         "COVO_AUDIO_CHAT_FD_MODEL=" + _env_value(_covo_env("MODEL", "covo_audio_chat_fd")),

@@ -24,6 +24,7 @@ from vox_symposium.env import (
 )
 from vox_symposium.providers import (
     PCM_GATEWAY_PROVIDERS,
+    MOSHI_PROTOCOL_PROVIDERS,
     SUPPORTED_PROVIDERS,
     normalize_provider,
     provider_env_prefix,
@@ -64,7 +65,7 @@ class Settings:
     minicpm_length_penalty: float
     minicpm_input_chunk_ms: int
     minicpm_queue_timeout: float
-    moshi: MoshiSettings | None
+    moshi_protocols: dict[str, MoshiSettings]
     pcm_gateways: dict[str, PcmGatewaySettings]
 
 
@@ -137,11 +138,13 @@ def load_settings() -> Settings:
         if _uses_provider("minicpm", agent_citizen, agent_scholar)
         else os.getenv("MINICPM_REALTIME_URL")
     )
-    moshi_settings = (
-        load_moshi_settings(required=True)
-        if _uses_provider("moshi", agent_citizen, agent_scholar)
-        else None
-    )
+    moshi_protocols = {
+        provider: settings
+        for provider in MOSHI_PROTOCOL_PROVIDERS
+        if _uses_provider(provider, agent_citizen, agent_scholar)
+        for settings in [load_moshi_settings(provider, required=True)]
+        if settings is not None
+    }
     pcm_gateways = {
         provider: gateway
         for provider in PCM_GATEWAY_PROVIDERS
@@ -180,7 +183,7 @@ def load_settings() -> Settings:
         minicpm_length_penalty=float_env("MINICPM_LENGTH_PENALTY", 1.1),
         minicpm_input_chunk_ms=int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
         minicpm_queue_timeout=float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
-        moshi=moshi_settings,
+        moshi_protocols=moshi_protocols,
         pcm_gateways=pcm_gateways,
     )
 
@@ -239,13 +242,17 @@ def gemini_live_model(backend: str) -> str:
     return os.getenv("GEMINI_LIVE_MODEL", default)
 
 
-def load_moshi_settings(*, required: bool) -> MoshiSettings | None:
-    url = required_env("MOSHI_REALTIME_URL") if required else os.getenv("MOSHI_REALTIME_URL")
+def load_moshi_settings(provider: str = "moshi", *, required: bool) -> MoshiSettings | None:
+    provider = normalize_provider(provider)
+    prefix = provider_env_prefix(provider)
+    url = first_env(_env_names(provider, "REALTIME_URL"))
+    if required and not url:
+        raise RuntimeError(f"Missing required environment variable: {prefix}_REALTIME_URL")
     if not url:
         return None
     return MoshiSettings(
         url=_websocket_url(url, default_path="/api/chat"),
-        api_key=os.getenv("MOSHI_API_KEY") or None,
+        api_key=first_env(_env_names(provider, "API_KEY")) or None,
     )
 
 

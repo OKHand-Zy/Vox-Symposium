@@ -155,7 +155,6 @@ def build_agent_instructions(scenario: dict[str, Any], agent: AgentKey) -> str:
     other_key = "scholar" if agent == "citizen" else "citizen"
     other_agent = agents[other_key]
     scene = scenario.get("scene") or {}
-    run = scenario.get("run") or {}
 
     lines = [
         f"You are {self_agent['name']}.",
@@ -175,40 +174,16 @@ def build_agent_instructions(scenario: dict[str, Any], agent: AgentKey) -> str:
         "Prior conversation history:",
     ]
 
-    history = scenario.get("history") or []
-    if history:
-        lines.extend(_format_turn(turn) for turn in history)
+    history = list(scenario.get("history") or [])
+    opening = scenario.get("opening")
+    turns_for_prompt = [
+        *history,
+        *([opening] if opening and opening.get("agent") == agent else []),
+    ]
+    if turns_for_prompt:
+        lines.extend(_format_turn(turn) for turn in turns_for_prompt)
     else:
         lines.append("- No prior turns are available.")
-
-    opening = scenario.get("opening")
-    if opening:
-        lines.extend(
-            [
-                "",
-                "Opening turn reserved for playback:",
-                _format_turn(opening),
-            ]
-        )
-
-    lines.extend(
-        [
-            "",
-            "Runtime instructions:",
-            "- Continue from the prior history and opening turn; do not restart the conversation.",
-            "- Stay in character and preserve the established speaking style.",
-            "- Keep each reply to 1-2 short spoken sentences.",
-            f"- Continue for about {run.get('dialogue_turns', 5)} dialogue turns before evaluation.",
-            "- Do not mention the evaluation question, answer choices, or correct answer during the dialogue.",
-        ]
-    )
-    if agent == "citizen":
-        lines.append("- You are the simulated conversation partner, not the model being evaluated.")
-    else:
-        lines.append(
-            "- You are the voice model being evaluated; answer later evaluation questions "
-            "with the best choice only when asked."
-        )
 
     return "\n".join(lines)
 

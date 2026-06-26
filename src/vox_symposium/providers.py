@@ -12,7 +12,9 @@ SUPPORTED_PROVIDERS = frozenset(
     }
 )
 
-PCM_GATEWAY_PROVIDERS = frozenset({"personaplex", "covo_audio_chat_fd"})
+MOSHI_PROTOCOL_PROVIDERS = frozenset({"moshi", "personaplex"})
+
+PCM_GATEWAY_PROVIDERS = frozenset({"covo_audio_chat_fd"})
 
 _PROVIDER_ALIASES = {
     "azure_openai": "openai",
@@ -59,4 +61,3 @@ def provider_env_prefix(provider: str) -> str:
 def provider_label(provider: str) -> str:
     normalized = normalize_provider(provider)
     return _PROVIDER_LABELS.get(normalized, normalized)
-
