@@ -12,18 +12,15 @@ except ModuleNotFoundError:
         return False
 
 from vox_symposium.env import (
-    bool_env_any,
     env_with_legacy,
     first_env,
     float_env,
     int_env,
-    int_env_any,
     normalized_env,
     optional_int_env,
     required_env,
 )
 from vox_symposium.providers import (
-    PCM_GATEWAY_PROVIDERS,
     MOSHI_PROTOCOL_PROVIDERS,
     SUPPORTED_PROVIDERS,
     normalize_provider,
@@ -66,7 +63,6 @@ class Settings:
     minicpm_input_chunk_ms: int
     minicpm_queue_timeout: float
     moshi_protocols: dict[str, MoshiSettings]
-    pcm_gateways: dict[str, PcmGatewaySettings]
 
 
 @dataclass(frozen=True)
@@ -91,17 +87,6 @@ class OpenAIAuthConfig:
 class MoshiSettings:
     url: str
     api_key: str | None
-
-
-@dataclass(frozen=True)
-class PcmGatewaySettings:
-    provider: str
-    url: str
-    api_key: str | None
-    model: str
-    input_sample_rate: int
-    output_sample_rate: int
-    manual_activity: bool
 
 
 def load_settings() -> Settings:
@@ -145,13 +130,6 @@ def load_settings() -> Settings:
         for settings in [load_moshi_settings(provider, required=True)]
         if settings is not None
     }
-    pcm_gateways = {
-        provider: gateway
-        for provider in PCM_GATEWAY_PROVIDERS
-        if _uses_provider(provider, agent_citizen, agent_scholar)
-        for gateway in [load_pcm_gateway_settings(provider, required=True)]
-        if gateway is not None
-    }
 
     return Settings(
         livekit_url=required_env("LIVEKIT_URL"),
@@ -184,7 +162,6 @@ def load_settings() -> Settings:
         minicpm_input_chunk_ms=int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
         minicpm_queue_timeout=float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
         moshi_protocols=moshi_protocols,
-        pcm_gateways=pcm_gateways,
     )
 
 
@@ -256,25 +233,6 @@ def load_moshi_settings(provider: str = "moshi", *, required: bool) -> MoshiSett
     )
 
 
-def load_pcm_gateway_settings(provider: str, *, required: bool) -> PcmGatewaySettings | None:
-    provider = normalize_provider(provider)
-    prefix = provider_env_prefix(provider)
-    url = first_env(_env_names(provider, "REALTIME_URL"))
-    if required and not url:
-        raise RuntimeError(f"Missing required environment variable: {prefix}_REALTIME_URL")
-    if not url:
-        return None
-    return PcmGatewaySettings(
-        provider=provider,
-        url=_websocket_url(url),
-        api_key=first_env(_env_names(provider, "API_KEY")) or None,
-        model=first_env(_env_names(provider, "MODEL")) or provider,
-        input_sample_rate=int_env_any(_env_names(provider, "INPUT_SAMPLE_RATE"), 24_000),
-        output_sample_rate=int_env_any(_env_names(provider, "OUTPUT_SAMPLE_RATE"), 24_000),
-        manual_activity=bool_env_any(_env_names(provider, "MANUAL_ACTIVITY"), False),
-    )
-
-
 def _provider_env(primary: str, legacy: str, *, default: str) -> str:
     return normalize_provider(env_with_legacy(primary, legacy, default=default))
 
@@ -317,10 +275,7 @@ def _validate_provider(agent: AgentConfig) -> None:
 
 def _env_names(provider: str, suffix: str) -> list[str]:
     prefix = provider_env_prefix(provider)
-    names = [f"{prefix}_{suffix}"]
-    if provider == "covo_audio_chat_fd":
-        names.append(f"COVO_{suffix}")
-    return names
+    return [f"{prefix}_{suffix}"]
 
 
 def _websocket_url(url: str, *, default_path: str | None = None) -> str:

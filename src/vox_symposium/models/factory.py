@@ -8,19 +8,17 @@ from vox_symposium.config import (
     load_gemini_auth,
     load_moshi_settings,
     load_openai_auth,
-    load_pcm_gateway_settings,
 )
 from vox_symposium.env import float_env, int_env, required_env
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.providers import (
     MOSHI_PROTOCOL_PROVIDERS,
-    PCM_GATEWAY_PROVIDERS,
     normalize_provider,
     provider_label,
 )
 
 if TYPE_CHECKING:
-    from vox_symposium.config import AgentConfig, PcmGatewaySettings, Settings
+    from vox_symposium.config import AgentConfig, Settings
 
 
 def build_model_from_settings(
@@ -94,16 +92,6 @@ def build_model_from_settings(
             text_prompt=agent.instructions,
         )
 
-    if provider in PCM_GATEWAY_PROVIDERS:
-        try:
-            gateway = settings.pcm_gateways[provider]
-        except KeyError as exc:
-            raise RuntimeError(
-                f"{provider_label(provider)} realtime URL is required when a participant uses "
-                f"provider={provider}"
-            ) from exc
-        return _build_pcm_gateway(gateway, agent.instructions, evaluation_mode=evaluation_mode)
-
     raise RuntimeError(f"Unsupported provider for {agent.identity}: {agent.provider}")
 
 
@@ -171,30 +159,4 @@ def build_model_from_env(
             text_prompt=instructions,
         )
 
-    if provider in PCM_GATEWAY_PROVIDERS:
-        gateway = load_pcm_gateway_settings(provider, required=True)
-        if gateway is None:
-            raise RuntimeError(f"{provider_label(provider)} realtime URL is required when provider={provider}")
-        return _build_pcm_gateway(gateway, instructions, evaluation_mode=evaluation_mode)
-
     raise RuntimeError(f"Unsupported provider: {provider}")
-
-
-def _build_pcm_gateway(
-    gateway: PcmGatewaySettings,
-    instructions: str,
-    *,
-    evaluation_mode: bool,
-) -> RealtimeAudioModel:
-    from vox_symposium.models.pcm_gateway import PcmGatewayRealtimeModel
-
-    return PcmGatewayRealtimeModel(
-        provider_name=provider_label(gateway.provider),
-        url=gateway.url,
-        api_key=gateway.api_key,
-        model=gateway.model,
-        instructions=instructions,
-        input_sample_rate=gateway.input_sample_rate,
-        output_sample_rate=gateway.output_sample_rate,
-        manual_activity=evaluation_mode or gateway.manual_activity,
-    )

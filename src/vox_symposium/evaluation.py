@@ -18,7 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from vox_symposium.audio import PcmAudio, rechunk_pcm16
 from vox_symposium.config import gemini_live_model
-from vox_symposium.env import env_with_legacy, first_env, normalized_env
+from vox_symposium.env import env_with_legacy, normalized_env
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.models.factory import build_model_from_env
 from vox_symposium.recording import RecordedAudio, audio_event_fields, write_wav
@@ -859,16 +859,6 @@ def _effective_model_snapshot(provider: str) -> tuple[str, str | None, dict[str,
         return os.getenv("PERSONAPLEX_MODEL", "personaplex"), "moshi", {
             "REALTIME_URL": _redacted_url(os.getenv("PERSONAPLEX_REALTIME_URL", "")),
         }
-    if provider == "covo_audio_chat_fd":
-        return (
-            _covo_env("MODEL", "covo_audio_chat_fd"),
-            "pcm_gateway",
-            {
-                "REALTIME_URL": _redacted_url(_covo_env("REALTIME_URL", "")),
-                "INPUT_SAMPLE_RATE": _covo_env("INPUT_SAMPLE_RATE", "24000"),
-                "OUTPUT_SAMPLE_RATE": _covo_env("OUTPUT_SAMPLE_RATE", "24000"),
-            },
-        )
     return "", None, {}
 
 
@@ -897,11 +887,6 @@ def _provider_env_snapshot() -> list[str]:
         "",
         "PERSONAPLEX_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("PERSONAPLEX_REALTIME_URL", ""))),
         "PERSONAPLEX_MODEL=" + _env_value(os.getenv("PERSONAPLEX_MODEL", "personaplex")),
-        "",
-        "COVO_AUDIO_CHAT_FD_REALTIME_URL=" + _env_value(_redacted_url(_covo_env("REALTIME_URL", ""))),
-        "COVO_AUDIO_CHAT_FD_MODEL=" + _env_value(_covo_env("MODEL", "covo_audio_chat_fd")),
-        "COVO_AUDIO_CHAT_FD_INPUT_SAMPLE_RATE=" + _env_value(_covo_env("INPUT_SAMPLE_RATE", "24000")),
-        "COVO_AUDIO_CHAT_FD_OUTPUT_SAMPLE_RATE=" + _env_value(_covo_env("OUTPUT_SAMPLE_RATE", "24000")),
     ]
     return lines
 
@@ -945,10 +930,6 @@ def _drain_queue(queue: asyncio.Queue[Any]) -> None:
 
 def _other_agent(agent: str) -> str:
     return "scholar" if agent == "citizen" else "citizen"
-
-
-def _covo_env(suffix: str, default: str) -> str:
-    return first_env([f"COVO_AUDIO_CHAT_FD_{suffix}", f"COVO_{suffix}"]) or default
 
 
 def _default_provider(agent: str) -> str:
