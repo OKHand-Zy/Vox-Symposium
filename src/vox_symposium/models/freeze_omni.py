@@ -12,6 +12,10 @@ from vox_symposium.models.base import QueueBackedRealtimeAudioModel
 logger = logging.getLogger(__name__)
 
 
+class FreezeOmniTooManyUsersError(RuntimeError):
+    pass
+
+
 class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
     """VITA-MLLM Freeze-Omni Flask-SocketIO demo server adapter."""
 
@@ -26,6 +30,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         ssl_verify: bool = False,
         input_chunk_ms: int = 20,
         connect_timeout: float = 30.0,
+        connect_retries: int = 5,
+        connect_retry_delay: float = 5.0,
         prompt_timeout: float = 30.0,
         post_turn_poll_seconds: float = 60.0,
         post_turn_idle_seconds: float = 3.0,
@@ -36,6 +42,10 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             raise ValueError("Freeze-Omni input chunk duration must be positive")
         if connect_timeout <= 0:
             raise ValueError("Freeze-Omni connect timeout must be positive")
+        if connect_retries < 0:
+            raise ValueError("Freeze-Omni connect retries cannot be negative")
+        if connect_retry_delay <= 0:
+            raise ValueError("Freeze-Omni connect retry delay must be positive")
         if prompt_timeout <= 0:
             raise ValueError("Freeze-Omni prompt timeout must be positive")
         if post_turn_poll_seconds <= 0:
@@ -48,6 +58,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self.ssl_verify = ssl_verify
         self.input_chunk_ms = input_chunk_ms
         self.connect_timeout = connect_timeout
+        self.connect_retries = connect_retries
+        self.connect_retry_delay = connect_retry_delay
         self.prompt_timeout = prompt_timeout
         self.post_turn_poll_seconds = post_turn_poll_seconds
         self.post_turn_idle_seconds = post_turn_idle_seconds
@@ -75,25 +87,41 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
                 "or `pip install 'python-socketio[client]>=5.11,<6'`."
             ) from exc
 
-        self._prompt_ack = asyncio.get_running_loop().create_future()
-        client = socketio.AsyncClient(
-            reconnection=False,
-            logger=False,
-            engineio_logger=False,
-            ssl_verify=self.ssl_verify,
-        )
-        self._register_handlers(client)
-        self._client = client
+        for attempt in range(self.connect_retries + 1):
+            self._fatal_error = None
+            self._prompt_ack = asyncio.get_running_loop().create_future()
+            client = socketio.AsyncClient(
+                reconnection=False,
+                logger=False,
+                engineio_logger=False,
+                ssl_verify=self.ssl_verify,
+            )
+            self._register_handlers(client)
+            self._client = client
 
-        try:
-            await client.connect(self.url, wait_timeout=self.connect_timeout)
-            self._connected = True
-            await client.emit("prompt_text", self.instructions)
-            await asyncio.wait_for(self._prompt_ack, timeout=self.prompt_timeout)
-            await client.emit("recording-started")
-        except Exception:
-            await self.close()
-            raise
+            try:
+                await client.connect(self.url, wait_timeout=self.connect_timeout)
+                self._connected = True
+                self._raise_if_failed()
+                await client.emit("prompt_text", self.instructions)
+                await asyncio.wait_for(self._prompt_ack, timeout=self.prompt_timeout)
+                await client.emit("recording-started")
+                return
+            except Exception as exc:
+                error = self._fatal_error or exc
+                await self._disconnect_client(client)
+                if isinstance(error, FreezeOmniTooManyUsersError) and attempt < self.connect_retries:
+                    logger.info(
+                        "Freeze-Omni server is full; retrying connection in %.1fs (%s/%s)",
+                        self.connect_retry_delay,
+                        attempt + 1,
+                        self.connect_retries,
+                    )
+                    await asyncio.sleep(self.connect_retry_delay)
+                    continue
+                if error is not exc:
+                    raise error from exc
+                raise
 
     async def send_audio(self, audio: PcmAudio) -> None:
         self._raise_if_failed()
@@ -138,12 +166,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self._client = None
         self._connected = False
         if client is not None:
-            try:
-                if client.connected:
-                    await client.emit("recording-stopped")
-                    await client.disconnect()
-            except Exception:
-                logger.debug("Failed to close Freeze-Omni session cleanly", exc_info=True)
+            await self._disconnect_client(client, emit_recording_stopped=True)
         self.close_output_streams()
 
     def _register_handlers(self, client) -> None:
@@ -158,7 +181,9 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
 
         @client.on("too_many_users")
         async def on_too_many_users(_data=None) -> None:
-            self._set_fatal_error(RuntimeError("Freeze-Omni server rejected the session: too many users"))
+            self._set_fatal_error(
+                FreezeOmniTooManyUsersError("Freeze-Omni server rejected the session: too many users")
+            )
 
         @client.on("out_time")
         async def on_out_time(_data=None) -> None:
@@ -214,6 +239,27 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             separators=(",", ":"),
         )
         await self._client.emit("audio", payload)
+
+    async def _disconnect_client(self, client, *, emit_recording_stopped: bool = False) -> None:
+        if self._client is client:
+            self._client = None
+        self._connected = False
+        self._consume_prompt_ack_exception()
+        try:
+            if client.connected:
+                if emit_recording_stopped:
+                    await client.emit("recording-stopped")
+                await client.disconnect()
+        except Exception:
+            logger.debug("Failed to disconnect Freeze-Omni session cleanly", exc_info=True)
+
+    def _consume_prompt_ack_exception(self) -> None:
+        if self._prompt_ack is None or not self._prompt_ack.done():
+            return
+        try:
+            self._prompt_ack.exception()
+        except Exception:
+            pass
 
     async def _poll_with_silence(self) -> None:
         silence = b"\x00" * self._input_chunk_bytes

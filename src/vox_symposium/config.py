@@ -67,6 +67,8 @@ class Settings:
     freeze_omni_ssl_verify: bool
     freeze_omni_input_chunk_ms: int
     freeze_omni_connect_timeout: float
+    freeze_omni_connect_retries: int
+    freeze_omni_connect_retry_delay: float
     freeze_omni_prompt_timeout: float
     freeze_omni_post_turn_poll_seconds: float
     freeze_omni_post_turn_idle_seconds: float
@@ -180,6 +182,8 @@ def load_settings() -> Settings:
         freeze_omni_ssl_verify=bool_env("FREEZE_OMNI_SSL_VERIFY", False),
         freeze_omni_input_chunk_ms=int_env("FREEZE_OMNI_INPUT_CHUNK_MS", 20),
         freeze_omni_connect_timeout=float_env("FREEZE_OMNI_CONNECT_TIMEOUT", 30.0),
+        freeze_omni_connect_retries=int_env("FREEZE_OMNI_CONNECT_RETRIES", 5),
+        freeze_omni_connect_retry_delay=float_env("FREEZE_OMNI_CONNECT_RETRY_DELAY", 5.0),
         freeze_omni_prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 30.0),
         freeze_omni_post_turn_poll_seconds=float_env(
             "FREEZE_OMNI_POST_TURN_POLL_SECONDS",

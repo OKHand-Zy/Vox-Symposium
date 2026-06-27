@@ -419,6 +419,8 @@ FREEZE_OMNI_REALTIME_URL=https://127.0.0.1:7860
 FREEZE_OMNI_SSL_VERIFY=false
 FREEZE_OMNI_INPUT_CHUNK_MS=20
 FREEZE_OMNI_CONNECT_TIMEOUT=30
+FREEZE_OMNI_CONNECT_RETRIES=5
+FREEZE_OMNI_CONNECT_RETRY_DELAY=5
 FREEZE_OMNI_POST_TURN_IDLE_SECONDS=3
 FREEZE_OMNI_POST_TURN_POLL_SECONDS=60
 ```
@@ -434,6 +436,12 @@ Freeze-Omni server 的 Socket.IO `connect` handler 會初始化 session prompt�
 容器環境較慢時可能超過 Python Socket.IO client 預設 namespace wait timeout，導致
 `ConnectionError: One or more namespaces failed to connect`。這時把
 `FREEZE_OMNI_CONNECT_TIMEOUT` 調大，例如 `60`。
+
+官方 server 在 disconnect 時會等待數秒才釋放 `connected_users`。如果 server 以
+`--max_users 1` 啟動，連續跑 dataset 多筆評測時，下一筆可能暫時收到
+`too_many_users`。Vox 會依 `FREEZE_OMNI_CONNECT_RETRIES` 和
+`FREEZE_OMNI_CONNECT_RETRY_DELAY` 自動重試；若 GPU 載入或釋放較慢，可以把 retry delay
+調大，或把 Freeze-Omni server 的 `--max_users` 提高。
 
 官方 `bin/server.py` 預設只 emit 音訊，不會把生成文字送回 client。若要讓 Vox 同時保存
 Freeze-Omni 的文字 transcript，需要在 Freeze-Omni server 加上 `text_delta` /

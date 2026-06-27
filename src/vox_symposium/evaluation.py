@@ -891,6 +891,8 @@ def _provider_env_snapshot() -> list[str]:
         "FREEZE_OMNI_SSL_VERIFY=" + _env_value(os.getenv("FREEZE_OMNI_SSL_VERIFY", "false")),
         "FREEZE_OMNI_INPUT_CHUNK_MS=" + _env_value(os.getenv("FREEZE_OMNI_INPUT_CHUNK_MS", "20")),
         "FREEZE_OMNI_CONNECT_TIMEOUT=" + _env_value(os.getenv("FREEZE_OMNI_CONNECT_TIMEOUT", "30.0")),
+        "FREEZE_OMNI_CONNECT_RETRIES=" + _env_value(os.getenv("FREEZE_OMNI_CONNECT_RETRIES", "5")),
+        "FREEZE_OMNI_CONNECT_RETRY_DELAY=" + _env_value(os.getenv("FREEZE_OMNI_CONNECT_RETRY_DELAY", "5.0")),
         "FREEZE_OMNI_PROMPT_TIMEOUT=" + _env_value(os.getenv("FREEZE_OMNI_PROMPT_TIMEOUT", "30.0")),
         "FREEZE_OMNI_POST_TURN_POLL_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_POLL_SECONDS", "60.0")),
         "FREEZE_OMNI_POST_TURN_IDLE_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_IDLE_SECONDS", "3.0")),

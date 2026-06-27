@@ -90,6 +90,8 @@ def build_model_from_settings(
             ssl_verify=settings.freeze_omni_ssl_verify,
             input_chunk_ms=settings.freeze_omni_input_chunk_ms,
             connect_timeout=settings.freeze_omni_connect_timeout,
+            connect_retries=settings.freeze_omni_connect_retries,
+            connect_retry_delay=settings.freeze_omni_connect_retry_delay,
             prompt_timeout=settings.freeze_omni_prompt_timeout,
             post_turn_poll_seconds=settings.freeze_omni_post_turn_poll_seconds,
             post_turn_idle_seconds=settings.freeze_omni_post_turn_idle_seconds,
@@ -172,6 +174,8 @@ def build_model_from_env(
             ssl_verify=bool_env("FREEZE_OMNI_SSL_VERIFY", False),
             input_chunk_ms=int_env("FREEZE_OMNI_INPUT_CHUNK_MS", 20),
             connect_timeout=float_env("FREEZE_OMNI_CONNECT_TIMEOUT", 30.0),
+            connect_retries=int_env("FREEZE_OMNI_CONNECT_RETRIES", 5),
+            connect_retry_delay=float_env("FREEZE_OMNI_CONNECT_RETRY_DELAY", 5.0),
             prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 30.0),
             post_turn_poll_seconds=float_env(
                 "FREEZE_OMNI_POST_TURN_POLL_SECONDS",
