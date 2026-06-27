@@ -12,6 +12,7 @@ except ModuleNotFoundError:
         return False
 
 from vox_symposium.env import (
+    bool_env,
     env_with_legacy,
     first_env,
     float_env,
@@ -62,6 +63,12 @@ class Settings:
     minicpm_length_penalty: float
     minicpm_input_chunk_ms: int
     minicpm_queue_timeout: float
+    freeze_omni_realtime_url: str | None
+    freeze_omni_ssl_verify: bool
+    freeze_omni_input_chunk_ms: int
+    freeze_omni_prompt_timeout: float
+    freeze_omni_post_turn_poll_seconds: float
+    freeze_omni_post_turn_idle_seconds: float
     moshi_protocols: dict[str, MoshiSettings]
 
 
@@ -123,6 +130,11 @@ def load_settings() -> Settings:
         if _uses_provider("minicpm", agent_citizen, agent_scholar)
         else os.getenv("MINICPM_REALTIME_URL")
     )
+    freeze_omni_url = (
+        required_env("FREEZE_OMNI_REALTIME_URL")
+        if _uses_provider("freeze_omni", agent_citizen, agent_scholar)
+        else os.getenv("FREEZE_OMNI_REALTIME_URL")
+    )
     moshi_protocols = {
         provider: settings
         for provider in MOSHI_PROTOCOL_PROVIDERS
@@ -161,6 +173,20 @@ def load_settings() -> Settings:
         minicpm_length_penalty=float_env("MINICPM_LENGTH_PENALTY", 1.1),
         minicpm_input_chunk_ms=int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
         minicpm_queue_timeout=float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
+        freeze_omni_realtime_url=(
+            _socketio_url(freeze_omni_url) if freeze_omni_url else None
+        ),
+        freeze_omni_ssl_verify=bool_env("FREEZE_OMNI_SSL_VERIFY", False),
+        freeze_omni_input_chunk_ms=int_env("FREEZE_OMNI_INPUT_CHUNK_MS", 20),
+        freeze_omni_prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 30.0),
+        freeze_omni_post_turn_poll_seconds=float_env(
+            "FREEZE_OMNI_POST_TURN_POLL_SECONDS",
+            60.0,
+        ),
+        freeze_omni_post_turn_idle_seconds=float_env(
+            "FREEZE_OMNI_POST_TURN_IDLE_SECONDS",
+            3.0,
+        ),
         moshi_protocols=moshi_protocols,
     )
 
@@ -290,3 +316,15 @@ def _websocket_url(url: str, *, default_path: str | None = None) -> str:
     if default_path and path in {"", "/"}:
         path = default_path
     return urlunsplit((scheme, parsed.netloc, path, parsed.query, parsed.fragment))
+
+
+def _socketio_url(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.netloc:
+        raise RuntimeError(f"Socket.IO URL must be http(s):// or ws(s)://, got {url!r}")
+    if parsed.hostname in {"0.0.0.0", "::"}:
+        raise RuntimeError(
+            "Socket.IO URL cannot use a wildcard address; "
+            "use 127.0.0.1, a host name, or the server IP"
+        )
+    return url

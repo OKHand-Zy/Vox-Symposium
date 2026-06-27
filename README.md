@@ -27,7 +27,7 @@ Agent-Scholar model output -> Agent-Scholar LiveKit audio track -> Agent-Citizen
 - Agent-Citizen：代表人類使用者，用來模擬一般人對 Voice Agent 的提問、追問與互動。
 - Agent-Scholar：代表被測試的 Voice Agent，也就是你要觀察、驗證與調整的目標代理。
 
-Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime、Gemini Live、MiniCPM-o 4.5、Moshi 或 PersonaPlex。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions；但 Kyutai 官方 Moshi server 不會套用 per-session instructions，細節見下方 Moshi 限制說明。
+Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime、Gemini Live、MiniCPM-o 4.5、Freeze-Omni、Moshi 或 PersonaPlex。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions；但 Kyutai 官方 Moshi server 不會套用 per-session instructions，細節見下方 Moshi 限制說明。
 
 ## 重要資料位置
 
@@ -319,6 +319,7 @@ cp .env.example .env
 - Gemini 使用 AI Studio 時：`GEMINI_API_KEY`
 - Gemini 使用 Vertex AI 時：`GOOGLE_CLOUD_PROJECT`、`GOOGLE_APPLICATION_CREDENTIALS`
 - MiniCPM-o 4.5：`MINICPM_REALTIME_URL`
+- Freeze-Omni：`FREEZE_OMNI_REALTIME_URL`
 - Moshi：`MOSHI_REALTIME_URL`
 - PersonaPlex：`PERSONAPLEX_REALTIME_URL`
 
@@ -341,6 +342,7 @@ AGENT_SCHOLAR_INSTRUCTIONS=You are Agent-Scholar, the voice agent under test. Ke
 - `openai`：使用 OpenAI Realtime。
 - `gemini`：使用 Gemini Live。
 - `minicpm`：使用自架 MiniCPM-o 4.5 Audio Full-Duplex Gateway。
+- `freeze_omni`：使用自架 VITA-MLLM Freeze-Omni Flask-SocketIO demo server。
 - `moshi`：使用 Kyutai Moshi server `/api/chat` WebSocket。
 - `personaplex`：使用 PersonaPlex live server，也就是 Moshi `/api/chat` WebSocket protocol。
 
@@ -399,6 +401,33 @@ MINICPM_QUEUE_TIMEOUT=300
 於對方說完後輸出語音，並追加靜音 input chunk 讓模型繼續進行 listen/speak
 決策。模型說話期間會持續以即時速度送入靜音，直到模型回到 `listen`，避免
 full-duplex 生成因沒有後續 input 而中途停止；一般 LiveKit participant 不會加入這項限制。
+
+Freeze-Omni 需要先啟動官方 [VITA-MLLM/Freeze-Omni](https://github.com/VITA-MLLM/Freeze-Omni)
+Flask-SocketIO demo server。Vox Symposium 只連 server，不直接在主流程載入
+Freeze-Omni 權重。使用前先安裝可選依賴：
+
+```bash
+pip install -e '.[freeze-omni]'
+```
+
+只將 Scholar 換成 Freeze-Omni：
+
+```env
+AGENT_CITIZEN_PROVIDER=gemini
+AGENT_SCHOLAR_PROVIDER=freeze_omni
+FREEZE_OMNI_REALTIME_URL=https://127.0.0.1:7860
+FREEZE_OMNI_SSL_VERIFY=false
+FREEZE_OMNI_INPUT_CHUNK_MS=20
+FREEZE_OMNI_POST_TURN_IDLE_SECONDS=3
+FREEZE_OMNI_POST_TURN_POLL_SECONDS=60
+```
+
+官方 server 預設使用自簽憑證，因此本 adapter 預設 `FREEZE_OMNI_SSL_VERIFY=false`。
+正式環境如果換成可信任憑證，可以設為 `true`。Freeze-Omni 官方 Socket.IO
+protocol 不會送出文字 transcript，也沒有明確的生成完成 event；Vox 端會在
+evaluation 的輸入回合結束後送入短靜音來輪詢 queued TTS 音訊，並在最後一段音訊後
+閒置 `FREEZE_OMNI_POST_TURN_IDLE_SECONDS` 秒停止輪詢。如果模型輸出間隔較長，請調大
+這個值。
 
 Moshi 和 PersonaPlex 走 Moshi 二進位 WebSocket protocol：Vox 送入/接收 24 kHz mono Opus pages，內部轉回 PCM16。使用前先安裝可選依賴：
 
@@ -576,6 +605,7 @@ LIVEKIT_ROOM=test-room
 - OpenAI Realtime input 會被 resample 成 mono 24 kHz PCM。
 - Gemini Live input 會被 resample 成 mono 16 kHz PCM。
 - MiniCPM input 會轉成 mono 16 kHz float32 PCM；output 24 kHz float32 PCM 會轉回 PCM16。
+- Freeze-Omni input 會轉成 mono 16 kHz PCM16；output 24 kHz PCM16 會直接發布。
 - Moshi / PersonaPlex adapter 會把 PCM16 轉成 24 kHz mono Opus pages，並將 output Opus pages 解回 PCM16。
 - Model output 預期為 mono 24 kHz PCM，發布回 LiveKit 前會 resample 成 LiveKit publish sample rate。
 

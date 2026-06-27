@@ -9,7 +9,7 @@ from vox_symposium.config import (
     load_moshi_settings,
     load_openai_auth,
 )
-from vox_symposium.env import float_env, int_env, required_env
+from vox_symposium.env import bool_env, float_env, int_env, required_env
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.providers import (
     MOSHI_PROTOCOL_PROVIDERS,
@@ -75,6 +75,23 @@ def build_model_from_settings(
             input_chunk_ms=settings.minicpm_input_chunk_ms,
             queue_timeout=settings.minicpm_queue_timeout,
             evaluation_turn_taking=evaluation_mode,
+        )
+
+    if provider == "freeze_omni":
+        if settings.freeze_omni_realtime_url is None:
+            raise RuntimeError(
+                "FREEZE_OMNI_REALTIME_URL is required when a participant uses provider=freeze_omni"
+            )
+        from vox_symposium.models.freeze_omni import FreezeOmniRealtimeModel
+
+        return FreezeOmniRealtimeModel(
+            url=settings.freeze_omni_realtime_url,
+            instructions=agent.instructions,
+            ssl_verify=settings.freeze_omni_ssl_verify,
+            input_chunk_ms=settings.freeze_omni_input_chunk_ms,
+            prompt_timeout=settings.freeze_omni_prompt_timeout,
+            post_turn_poll_seconds=settings.freeze_omni_post_turn_poll_seconds,
+            post_turn_idle_seconds=settings.freeze_omni_post_turn_idle_seconds,
         )
 
     if provider in MOSHI_PROTOCOL_PROVIDERS:
@@ -143,6 +160,25 @@ def build_model_from_env(
             input_chunk_ms=int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
             queue_timeout=float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
             evaluation_turn_taking=evaluation_mode,
+        )
+
+    if provider == "freeze_omni":
+        from vox_symposium.models.freeze_omni import FreezeOmniRealtimeModel
+
+        return FreezeOmniRealtimeModel(
+            url=required_env("FREEZE_OMNI_REALTIME_URL"),
+            instructions=instructions,
+            ssl_verify=bool_env("FREEZE_OMNI_SSL_VERIFY", False),
+            input_chunk_ms=int_env("FREEZE_OMNI_INPUT_CHUNK_MS", 20),
+            prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 30.0),
+            post_turn_poll_seconds=float_env(
+                "FREEZE_OMNI_POST_TURN_POLL_SECONDS",
+                60.0,
+            ),
+            post_turn_idle_seconds=float_env(
+                "FREEZE_OMNI_POST_TURN_IDLE_SECONDS",
+                3.0,
+            ),
         )
 
     if provider in MOSHI_PROTOCOL_PROVIDERS:

@@ -17,6 +17,9 @@ moshi = [
     "numpy>=1.26,<2.3",
     "sphn>=0.2.0,<0.3.0",
 ]
+freeze-omni = [
+    "python-socketio[client]>=5.11,<6",
+]
 
 [project.scripts]
 vox-symposium = "vox_symposium.main:main"

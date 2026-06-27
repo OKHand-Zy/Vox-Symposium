@@ -851,6 +851,10 @@ def _effective_model_snapshot(provider: str) -> tuple[str, str | None, dict[str,
         return gemini_live_model(backend), backend, {}
     if provider == "minicpm":
         return os.getenv("MINICPM_REALTIME_MODEL", "minicpm-realtime-gateway"), None, {}
+    if provider == "freeze_omni":
+        return os.getenv("FREEZE_OMNI_MODEL", "freeze-omni"), "socketio", {
+            "REALTIME_URL": _redacted_url(os.getenv("FREEZE_OMNI_REALTIME_URL", "")),
+        }
     if provider == "moshi":
         return os.getenv("MOSHI_MODEL", "moshi"), "moshi", {
             "REALTIME_URL": _redacted_url(os.getenv("MOSHI_REALTIME_URL", "")),
@@ -881,6 +885,14 @@ def _provider_env_snapshot() -> list[str]:
         "MINICPM_LENGTH_PENALTY=" + _env_value(os.getenv("MINICPM_LENGTH_PENALTY", "1.1")),
         "MINICPM_INPUT_CHUNK_MS=" + _env_value(os.getenv("MINICPM_INPUT_CHUNK_MS", "1000")),
         "MINICPM_QUEUE_TIMEOUT=" + _env_value(os.getenv("MINICPM_QUEUE_TIMEOUT", "300.0")),
+        "",
+        "FREEZE_OMNI_MODEL=" + _env_value(os.getenv("FREEZE_OMNI_MODEL", "freeze-omni")),
+        "FREEZE_OMNI_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("FREEZE_OMNI_REALTIME_URL", ""))),
+        "FREEZE_OMNI_SSL_VERIFY=" + _env_value(os.getenv("FREEZE_OMNI_SSL_VERIFY", "false")),
+        "FREEZE_OMNI_INPUT_CHUNK_MS=" + _env_value(os.getenv("FREEZE_OMNI_INPUT_CHUNK_MS", "20")),
+        "FREEZE_OMNI_PROMPT_TIMEOUT=" + _env_value(os.getenv("FREEZE_OMNI_PROMPT_TIMEOUT", "30.0")),
+        "FREEZE_OMNI_POST_TURN_POLL_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_POLL_SECONDS", "60.0")),
+        "FREEZE_OMNI_POST_TURN_IDLE_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_IDLE_SECONDS", "3.0")),
         "",
         "MOSHI_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("MOSHI_REALTIME_URL", ""))),
         "MOSHI_MODEL=" + _env_value(os.getenv("MOSHI_MODEL", "moshi")),

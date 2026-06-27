@@ -6,6 +6,7 @@ SUPPORTED_PROVIDERS = frozenset(
         "openai",
         "gemini",
         "minicpm",
+        "freeze_omni",
         "moshi",
         "personaplex",
     }
@@ -17,12 +18,15 @@ _PROVIDER_ALIASES = {
     "azure_openai": "openai",
     "minicpm_o_4_5": "minicpm",
     "minicpm_o": "minicpm",
+    "freeze": "freeze_omni",
+    "freeze_omni": "freeze_omni",
 }
 
 _PROVIDER_ENV_PREFIXES = {
     "openai": "OPENAI",
     "gemini": "GEMINI",
     "minicpm": "MINICPM",
+    "freeze_omni": "FREEZE_OMNI",
     "moshi": "MOSHI",
     "personaplex": "PERSONAPLEX",
 }
@@ -31,6 +35,7 @@ _PROVIDER_LABELS = {
     "openai": "OpenAI Realtime",
     "gemini": "Gemini Live",
     "minicpm": "MiniCPM-o 4.5",
+    "freeze_omni": "Freeze-Omni",
     "moshi": "Moshi",
     "personaplex": "PersonaPlex",
 }
