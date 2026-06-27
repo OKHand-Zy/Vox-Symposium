@@ -421,8 +421,10 @@ FREEZE_OMNI_INPUT_CHUNK_MS=20
 FREEZE_OMNI_CONNECT_TIMEOUT=30
 FREEZE_OMNI_CONNECT_RETRIES=5
 FREEZE_OMNI_CONNECT_RETRY_DELAY=5
+FREEZE_OMNI_TURN_START_DELAY=1
 FREEZE_OMNI_POST_TURN_IDLE_SECONDS=3
 FREEZE_OMNI_POST_TURN_POLL_SECONDS=60
+FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS=160
 ```
 
 官方 server 預設使用自簽憑證，因此本 adapter 預設 `FREEZE_OMNI_SSL_VERIFY=false`。
@@ -442,6 +444,13 @@ Freeze-Omni server 的 Socket.IO `connect` handler 會初始化 session prompt�
 `too_many_users`。Vox 會依 `FREEZE_OMNI_CONNECT_RETRIES` 和
 `FREEZE_OMNI_CONNECT_RETRY_DELAY` 自動重試；若 GPU 載入或釋放較慢，可以把 retry delay
 調大，或把 Freeze-Omni server 的 `--max_users` 提高。
+
+Freeze-Omni 的 `recording-started` event 沒有 ack。Vox 端發出 event 後會依
+`FREEZE_OMNI_TURN_START_DELAY` 等待一小段時間再送音訊，避免 server 還在 reset session
+時就收到新一輪語音。如果 server log 出現一段 `Received PCM data` 之後才看到
+`Recording started`，可以把這個值調大到 `2` 或 `3`。`FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS`
+控制 evaluation 回合結束後用靜音輪詢 queued TTS 的 chunk 大小；預設 `160` ms 可減少
+Socket.IO backlog。
 
 官方 `bin/server.py` 預設只 emit 音訊，不會把生成文字送回 client。若要讓 Vox 同時保存
 Freeze-Omni 的文字 transcript，需要在 Freeze-Omni server 加上 `text_delta` /

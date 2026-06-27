@@ -33,8 +33,10 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         connect_retries: int = 5,
         connect_retry_delay: float = 5.0,
         prompt_timeout: float = 30.0,
+        turn_start_delay: float = 1.0,
         post_turn_poll_seconds: float = 60.0,
         post_turn_idle_seconds: float = 3.0,
+        post_turn_poll_chunk_ms: int = 160,
     ) -> None:
         super().__init__()
         _validate_socketio_url(url)
@@ -48,10 +50,14 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             raise ValueError("Freeze-Omni connect retry delay must be positive")
         if prompt_timeout <= 0:
             raise ValueError("Freeze-Omni prompt timeout must be positive")
+        if turn_start_delay < 0:
+            raise ValueError("Freeze-Omni turn start delay cannot be negative")
         if post_turn_poll_seconds <= 0:
             raise ValueError("Freeze-Omni post-turn poll duration must be positive")
         if post_turn_idle_seconds <= 0:
             raise ValueError("Freeze-Omni post-turn idle timeout must be positive")
+        if post_turn_poll_chunk_ms <= 0:
+            raise ValueError("Freeze-Omni post-turn poll chunk duration must be positive")
 
         self.url = _socketio_http_url(url)
         self.instructions = instructions
@@ -61,10 +67,15 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self.connect_retries = connect_retries
         self.connect_retry_delay = connect_retry_delay
         self.prompt_timeout = prompt_timeout
+        self.turn_start_delay = turn_start_delay
         self.post_turn_poll_seconds = post_turn_poll_seconds
         self.post_turn_idle_seconds = post_turn_idle_seconds
+        self.post_turn_poll_chunk_ms = post_turn_poll_chunk_ms
         self._input_chunk_bytes = (
             int(self.input_sample_rate * input_chunk_ms / 1_000) * 2
+        )
+        self._poll_chunk_bytes = (
+            int(self.input_sample_rate * post_turn_poll_chunk_ms / 1_000) * 2
         )
         self._input_buffer = bytearray()
         self._client = None
@@ -148,6 +159,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self._saw_text_delta = False
         if self._connected and self._client is not None:
             await self._client.emit("recording-started")
+            if self.turn_start_delay:
+                await asyncio.sleep(self.turn_start_delay)
 
     async def end_audio_turn(self) -> None:
         if self._input_buffer:
@@ -262,8 +275,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             pass
 
     async def _poll_with_silence(self) -> None:
-        silence = b"\x00" * self._input_chunk_bytes
-        interval = self.input_chunk_ms / 1_000
+        silence = b"\x00" * self._poll_chunk_bytes
+        interval = self.post_turn_poll_chunk_ms / 1_000
         started_at = asyncio.get_running_loop().time()
         try:
             while self._connected:
