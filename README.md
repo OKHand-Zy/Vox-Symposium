@@ -418,6 +418,7 @@ AGENT_SCHOLAR_PROVIDER=freeze_omni
 FREEZE_OMNI_REALTIME_URL=https://127.0.0.1:7860
 FREEZE_OMNI_SSL_VERIFY=false
 FREEZE_OMNI_INPUT_CHUNK_MS=20
+FREEZE_OMNI_CONNECT_TIMEOUT=30
 FREEZE_OMNI_POST_TURN_IDLE_SECONDS=3
 FREEZE_OMNI_POST_TURN_POLL_SECONDS=60
 ```
@@ -428,6 +429,11 @@ protocol 沒有明確的生成完成 event；Vox 端會在 evaluation 的輸入�
 來輪詢 queued TTS 音訊，並在最後一段音訊後閒置
 `FREEZE_OMNI_POST_TURN_IDLE_SECONDS` 秒停止輪詢。如果模型輸出間隔較長，請調大
 這個值。
+
+Freeze-Omni server 的 Socket.IO `connect` handler 會初始化 session prompt，GPU 或
+容器環境較慢時可能超過 Python Socket.IO client 預設 namespace wait timeout，導致
+`ConnectionError: One or more namespaces failed to connect`。這時把
+`FREEZE_OMNI_CONNECT_TIMEOUT` 調大，例如 `60`。
 
 官方 `bin/server.py` 預設只 emit 音訊，不會把生成文字送回 client。若要讓 Vox 同時保存
 Freeze-Omni 的文字 transcript，需要在 Freeze-Omni server 加上 `text_delta` /

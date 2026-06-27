@@ -25,6 +25,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         instructions: str,
         ssl_verify: bool = False,
         input_chunk_ms: int = 20,
+        connect_timeout: float = 30.0,
         prompt_timeout: float = 30.0,
         post_turn_poll_seconds: float = 60.0,
         post_turn_idle_seconds: float = 3.0,
@@ -33,6 +34,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         _validate_socketio_url(url)
         if input_chunk_ms <= 0:
             raise ValueError("Freeze-Omni input chunk duration must be positive")
+        if connect_timeout <= 0:
+            raise ValueError("Freeze-Omni connect timeout must be positive")
         if prompt_timeout <= 0:
             raise ValueError("Freeze-Omni prompt timeout must be positive")
         if post_turn_poll_seconds <= 0:
@@ -44,6 +47,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self.instructions = instructions
         self.ssl_verify = ssl_verify
         self.input_chunk_ms = input_chunk_ms
+        self.connect_timeout = connect_timeout
         self.prompt_timeout = prompt_timeout
         self.post_turn_poll_seconds = post_turn_poll_seconds
         self.post_turn_idle_seconds = post_turn_idle_seconds
@@ -82,7 +86,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self._client = client
 
         try:
-            await client.connect(self.url)
+            await client.connect(self.url, wait_timeout=self.connect_timeout)
             self._connected = True
             await client.emit("prompt_text", self.instructions)
             await asyncio.wait_for(self._prompt_ack, timeout=self.prompt_timeout)
