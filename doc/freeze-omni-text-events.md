@@ -1,22 +1,20 @@
-# Freeze-Omni text event patch
+# Freeze-Omni 文字事件 patch
 
-Vox Symposium can connect to the official VITA-MLLM Freeze-Omni Real-Time
-Interactive Demo server. The upstream `bin/server.py` emits synthesized speech
-audio, but it does not emit generated text to the Socket.IO client.
+Vox Symposium 可以串接官方 VITA-MLLM Freeze-Omni Real-Time Interactive Demo
+server。上游 `bin/server.py` 會 emit 合成語音音訊，但不會把生成文字 emit 給
+Socket.IO client。
 
-This patch keeps the official audio protocol unchanged and adds two optional
-Socket.IO events:
+這個 patch 會保留官方音訊 protocol 不變，並新增兩個可選的 Socket.IO events：
 
-- `text_delta`: incremental generated text chunks.
-- `text_done`: final full generated text for clients that do not want deltas.
+- `text_delta`：增量生成文字片段。
+- `text_done`：完整的最終生成文字，供不想處理 delta 的 client 使用。
 
-Vox Symposium consumes `text_delta` through `RealtimeAudioModel.receive_text()`.
-If a patched server only emits `text_done`, Vox will use that final text instead.
+Vox Symposium 會透過 `RealtimeAudioModel.receive_text()` 消費 `text_delta`。
+如果 patched server 只 emit `text_done`，Vox 也會改用這份最終文字。
 
-## Patch `bin/server.py`
+## 修改 `bin/server.py`
 
-Inside `generate(outputs, sid)`, find this block in the `outputs['stat'] == 'cs'`
-section:
+在 `generate(outputs, sid)` 裡，找到 `outputs['stat'] == 'cs'` 區段中的這段：
 
 ```python
 if "�" in outputs['text'][len(last_text):]:
@@ -25,7 +23,7 @@ connected_users[sid][1].whole_text += outputs['text'][len(last_text):]
 cur_text += outputs['text'][len(last_text):]
 ```
 
-Replace it with:
+替換成：
 
 ```python
 delta_text = outputs['text'][len(last_text):]
@@ -38,20 +36,20 @@ if delta_text:
     socketio.emit('text_delta', {'text': delta_text}, to=sid)
 ```
 
-Then near the end of `generate(outputs, sid)`, just before:
+接著在 `generate(outputs, sid)` 接近結尾處、以下這行之前：
 
 ```python
 connected_users[sid][1].is_generate = False
 ```
 
-add:
+加入：
 
 ```python
 if connected_users[sid][1].whole_text:
     socketio.emit('text_done', {'text': connected_users[sid][1].whole_text}, to=sid)
 ```
 
-The patched tail should look like:
+patch 後的尾段應該會長這樣：
 
 ```python
     if not connected_users[sid][1].tts_over:
@@ -69,22 +67,21 @@ The patched tail should look like:
     connected_users[sid][1].is_generate = False
 ```
 
-## Client behavior
+## Client 行為
 
-The audio event remains unchanged:
+音訊 event 維持不變：
 
 ```python
 emit('audio', output_data.astype(np.int16).tobytes())
 ```
 
-Vox still receives this as 24 kHz mono PCM16 audio. With the patch above, Vox
-also receives generated text from the same Socket.IO session and stores it in
-the existing transcript path.
+Vox 仍會把這個 event 視為 24 kHz mono PCM16 audio 接收。套用上面的 patch 後，
+Vox 也會從同一個 Socket.IO session 收到生成文字，並把它存進既有的 transcript
+路徑。
 
-## Why this patch is needed
+## 為什麼需要這個 patch
 
-Freeze-Omni already builds generated text in `outputs['text']` and
-`connected_users[sid][1].whole_text`, but the official demo only prints text on
-the server side and only emits synthesized audio to the browser client. The
-patch exposes that existing text state over Socket.IO without changing the model
-pipeline.
+Freeze-Omni 其實已經在 `outputs['text']` 和
+`connected_users[sid][1].whole_text` 裡組出生成文字，但官方 demo 只會在 server
+端印出文字，並且只把合成音訊 emit 給瀏覽器 client。這個 patch 不改模型 pipeline，
+只把既有的文字狀態透過 Socket.IO 暴露出來。
