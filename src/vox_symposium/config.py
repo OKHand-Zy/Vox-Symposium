@@ -71,6 +71,7 @@ class Settings:
     freeze_omni_connect_retry_delay: float
     freeze_omni_prompt_timeout: float
     freeze_omni_turn_start_delay: float
+    freeze_omni_turn_preroll_silence_ms: int
     freeze_omni_post_turn_poll_seconds: float
     freeze_omni_post_turn_idle_seconds: float
     freeze_omni_post_turn_poll_chunk_ms: int
@@ -189,6 +190,10 @@ def load_settings() -> Settings:
         freeze_omni_connect_retry_delay=float_env("FREEZE_OMNI_CONNECT_RETRY_DELAY", 5.0),
         freeze_omni_prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 30.0),
         freeze_omni_turn_start_delay=float_env("FREEZE_OMNI_TURN_START_DELAY", 1.0),
+        freeze_omni_turn_preroll_silence_ms=int_env(
+            "FREEZE_OMNI_TURN_PREROLL_SILENCE_MS",
+            800,
+        ),
         freeze_omni_post_turn_poll_seconds=float_env(
             "FREEZE_OMNI_POST_TURN_POLL_SECONDS",
             60.0,

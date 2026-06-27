@@ -94,6 +94,7 @@ def build_model_from_settings(
             connect_retry_delay=settings.freeze_omni_connect_retry_delay,
             prompt_timeout=settings.freeze_omni_prompt_timeout,
             turn_start_delay=settings.freeze_omni_turn_start_delay,
+            turn_preroll_silence_ms=settings.freeze_omni_turn_preroll_silence_ms,
             post_turn_poll_seconds=settings.freeze_omni_post_turn_poll_seconds,
             post_turn_idle_seconds=settings.freeze_omni_post_turn_idle_seconds,
             post_turn_poll_chunk_ms=settings.freeze_omni_post_turn_poll_chunk_ms,
@@ -181,6 +182,7 @@ def build_model_from_env(
             connect_retry_delay=float_env("FREEZE_OMNI_CONNECT_RETRY_DELAY", 5.0),
             prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 30.0),
             turn_start_delay=float_env("FREEZE_OMNI_TURN_START_DELAY", 1.0),
+            turn_preroll_silence_ms=int_env("FREEZE_OMNI_TURN_PREROLL_SILENCE_MS", 800),
             post_turn_poll_seconds=float_env(
                 "FREEZE_OMNI_POST_TURN_POLL_SECONDS",
                 60.0,

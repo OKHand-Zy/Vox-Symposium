@@ -34,6 +34,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         connect_retry_delay: float = 5.0,
         prompt_timeout: float = 30.0,
         turn_start_delay: float = 1.0,
+        turn_preroll_silence_ms: int = 800,
         post_turn_poll_seconds: float = 60.0,
         post_turn_idle_seconds: float = 3.0,
         post_turn_poll_chunk_ms: int = 160,
@@ -53,6 +54,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             raise ValueError("Freeze-Omni prompt timeout must be positive")
         if turn_start_delay < 0:
             raise ValueError("Freeze-Omni turn start delay cannot be negative")
+        if turn_preroll_silence_ms < 0:
+            raise ValueError("Freeze-Omni turn preroll silence cannot be negative")
         if post_turn_poll_seconds <= 0:
             raise ValueError("Freeze-Omni post-turn poll duration must be positive")
         if post_turn_idle_seconds <= 0:
@@ -69,6 +72,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self.connect_retry_delay = connect_retry_delay
         self.prompt_timeout = prompt_timeout
         self.turn_start_delay = turn_start_delay
+        self.turn_preroll_silence_ms = turn_preroll_silence_ms
         self.post_turn_poll_seconds = post_turn_poll_seconds
         self.post_turn_idle_seconds = post_turn_idle_seconds
         self.post_turn_poll_chunk_ms = post_turn_poll_chunk_ms
@@ -163,6 +167,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             await self._client.emit("recording-started")
             if self.turn_start_delay:
                 await asyncio.sleep(self.turn_start_delay)
+            if self.turn_preroll_silence_ms:
+                await self._send_silence(self.turn_preroll_silence_ms)
 
     async def end_audio_turn(self) -> None:
         if self._input_buffer:
@@ -302,6 +308,17 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         finally:
             if stopped and self.stop_recording_after_turn:
                 await self._emit_recording_stopped()
+
+    async def _send_silence(self, duration_ms: int) -> None:
+        if duration_ms <= 0:
+            return
+        chunk_ms = self.post_turn_poll_chunk_ms
+        silence = b"\x00" * self._poll_chunk_bytes
+        remaining = duration_ms
+        while remaining > 0:
+            await self._send_audio_chunk(silence)
+            await asyncio.sleep(chunk_ms / 1_000)
+            remaining -= chunk_ms
 
     async def _emit_recording_stopped(self) -> None:
         client = self._client

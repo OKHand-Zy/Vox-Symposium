@@ -1,8 +1,10 @@
-# Freeze-Omni 文字事件 patch
+# Freeze-Omni 文字事件與多回合 VAD patch
 
 Vox Symposium 可以串接官方 VITA-MLLM Freeze-Omni Real-Time Interactive Demo
 server。上游 `bin/server.py` 會 emit 合成語音音訊，但不會把生成文字 emit 給
-Socket.IO client。
+Socket.IO client。此外，上游 `web/parms.py` 的 session reset 只會把 VAD 的
+`in_dialog` 狀態設回 `False`，沒有重置 Silero VAD iterator；連續多回合自動評測時，
+後續回合可能只看到 `Received PCM data`，但不再觸發 `Vad start`。
 
 這個 patch 會保留官方音訊 protocol 不變，並新增兩個可選的 Socket.IO events：
 
@@ -11,6 +13,24 @@ Socket.IO client。
 
 Vox Symposium 會透過 `RealtimeAudioModel.receive_text()` 消費 `text_delta`。
 如果 patched server 只 emit `text_done`，Vox 也會改用這份最終文字。
+
+## 修改 `web/parms.py`
+
+先讓每次 `recording-started` / `recording-stopped` 後的 `reset()` 都真正重置 VAD。
+在 `GlobalParams.reset()` 裡找到：
+
+```python
+self.wakeup_and_vad.in_dialog = False
+```
+
+替換成：
+
+```python
+self.wakeup_and_vad.reset_vad()
+```
+
+這會清掉 Silero VAD iterator 的內部狀態，避免第一輪正常、第二輪開始只收到 PCM
+但沒有 `Vad start` 的情況。
 
 ## 修改 `bin/server.py`
 
