@@ -7,8 +7,8 @@
 - `openai`：OpenAI Realtime
 - `gemini`：Gemini Live
 - `minicpm`：MiniCPM-o 4.5 Audio Full-Duplex Gateway
-- `moshi`：Kyutai Moshi `/api/chat`
-- `personaplex`：PersonaPlex live server 的 Moshi `/api/chat`
+- `moshi`：Kyutai Moshi `/api/chat`，官方 server 不支援 per-session prompt / instructions
+- `personaplex`：PersonaPlex live server 的 Moshi `/api/chat`，支援 `text_prompt`
 - `covo_audio_chat_fd`：Covo-Audio-Chat-FD PCM JSON gateway
 
 如果你的本地 Hugging Face 模型無法包成現有 PCM JSON gateway，才需要新增 provider adapter，實作 `RealtimeAudioModel` 介面，再把它註冊到 `src/vox_symposium/models/factory.py`。

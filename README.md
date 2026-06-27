@@ -27,7 +27,7 @@ Agent-Scholar model output -> Agent-Scholar LiveKit audio track -> Agent-Citizen
 - Agent-Citizen：代表人類使用者，用來模擬一般人對 Voice Agent 的提問、追問與互動。
 - Agent-Scholar：代表被測試的 Voice Agent，也就是你要觀察、驗證與調整的目標代理。
 
-Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime、Gemini Live、MiniCPM-o 4.5、Moshi、PersonaPlex，或透過 PCM gateway 串接 Covo-Audio-Chat-FD。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions。
+Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime、Gemini Live、MiniCPM-o 4.5、Moshi、PersonaPlex，或透過 PCM gateway 串接 Covo-Audio-Chat-FD。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions；但 Kyutai 官方 Moshi server 不會套用 per-session instructions，細節見下方 Moshi 限制說明。
 
 ## 重要資料位置
 
@@ -418,6 +418,11 @@ MOSHI_REALTIME_URL=ws://127.0.0.1:8998/api/chat
 
 若 `MOSHI_REALTIME_URL` 只填 `ws://127.0.0.1:8998`，程式會自動補上 `/api/chat`。
 
+注意：Kyutai 官方 Moshi server 目前不支援 OpenAI/Gemini 那種 per-session
+system prompt / instructions。Vox 端會把 instructions 放進 `text_prompt` query，
+但官方 `/api/chat` server 不會讀取這個參數，因此角色資料、場景與歷史對話不會真的
+被 Moshi 使用；模型行為主要由 server 啟動時載入的 weights/model 決定。
+
 PersonaPlex live server 也使用同一個 adapter。固定的 voice prompt 放在 URL query；每個 scenario/case 的 Scholar instructions 會由 Vox 自動 URL encode 後寫入 `text_prompt`，不用在 `.env` 寫死角色 prompt。
 
 ```env
@@ -541,6 +546,11 @@ MINICPM_REALTIME_URL=ws://127.0.0.1:8006/v1/realtime?mode=audio
 AGENT_SCHOLAR_PROVIDER=moshi
 MOSHI_REALTIME_URL=ws://127.0.0.1:8998/api/chat
 ```
+
+Kyutai 官方 Moshi server 不會讀取 Vox 寫入 URL 的 `text_prompt` query，所以
+Moshi 不會套用角色 prompt、場景 prompt 或歷史對話 prompt。若需要 prompt
+conditioning，請使用支援 `text_prompt` 的 Moshi-compatible server，例如
+PersonaPlex live server，或自行 patch server。
 
 如果其中一個角色使用 PersonaPlex live server，加入：
 

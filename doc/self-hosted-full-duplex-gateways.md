@@ -27,7 +27,9 @@ AGENT_SCHOLAR_PROVIDER=moshi
 MOSHI_REALTIME_URL=ws://127.0.0.1:8998/api/chat
 ```
 
-`MOSHI_REALTIME_URL` 可以填 `ws://127.0.0.1:8998`，Vox 會自動補 `/api/chat`。Moshi 模型實際選擇在 Moshi server 啟動參數中完成；Vox 會把每個 scenario/case 的 instructions 動態寫入 `text_prompt` query，但不改 server 端載入的 model。
+`MOSHI_REALTIME_URL` 可以填 `ws://127.0.0.1:8998`，Vox 會自動補 `/api/chat`。Moshi 模型實際選擇在 Moshi server 啟動參數中完成；Vox 端會把每個 scenario/case 的 instructions 動態寫入 `text_prompt` query，但不改 server 端載入的 model。
+
+重要限制：Kyutai 官方 Moshi server 目前不支援 OpenAI/Gemini 那種 per-session system prompt / instructions，也不會讀取 `text_prompt` query。因此使用官方 Moshi server 時，角色資料、場景與 prior conversation history 不會真的進入模型 context；這些 prompt 只會在支援 `text_prompt` 的 Moshi-compatible server 上生效，例如 PersonaPlex live server 或自行 patch 的 server。
 
 PersonaPlex 使用同一個 Vox adapter，但需要固定 voice prompt、server patch 與部署注意事項；請看 [PersonaPlex live server](personaplex-live-server.md)。
 
