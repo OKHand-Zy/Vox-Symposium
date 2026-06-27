@@ -424,10 +424,15 @@ FREEZE_OMNI_POST_TURN_POLL_SECONDS=60
 
 官方 server 預設使用自簽憑證，因此本 adapter 預設 `FREEZE_OMNI_SSL_VERIFY=false`。
 正式環境如果換成可信任憑證，可以設為 `true`。Freeze-Omni 官方 Socket.IO
-protocol 不會送出文字 transcript，也沒有明確的生成完成 event；Vox 端會在
-evaluation 的輸入回合結束後送入短靜音來輪詢 queued TTS 音訊，並在最後一段音訊後
-閒置 `FREEZE_OMNI_POST_TURN_IDLE_SECONDS` 秒停止輪詢。如果模型輸出間隔較長，請調大
+protocol 沒有明確的生成完成 event；Vox 端會在 evaluation 的輸入回合結束後送入短靜音
+來輪詢 queued TTS 音訊，並在最後一段音訊後閒置
+`FREEZE_OMNI_POST_TURN_IDLE_SECONDS` 秒停止輪詢。如果模型輸出間隔較長，請調大
 這個值。
+
+官方 `bin/server.py` 預設只 emit 音訊，不會把生成文字送回 client。若要讓 Vox 同時保存
+Freeze-Omni 的文字 transcript，需要在 Freeze-Omni server 加上 `text_delta` /
+`text_done` Socket.IO events；patch 方式請看
+[doc/freeze-omni-text-events.md](doc/freeze-omni-text-events.md)。
 
 Moshi 和 PersonaPlex 走 Moshi 二進位 WebSocket protocol：Vox 送入/接收 24 kHz mono Opus pages，內部轉回 PCM16。使用前先安裝可選依賴：
 

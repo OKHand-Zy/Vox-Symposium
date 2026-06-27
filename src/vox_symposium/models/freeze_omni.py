@@ -57,6 +57,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self._fatal_error: BaseException | None = None
         self._last_audio_at: float | None = None
         self._poll_task: asyncio.Task[None] | None = None
+        self._saw_text_delta = False
 
     async def connect(self) -> None:
         if self._client is not None:
@@ -112,6 +113,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         await self._stop_post_turn_polling()
         self._input_buffer.clear()
         self._last_audio_at = None
+        self._saw_text_delta = False
         if self._connected and self._client is not None:
             await self._client.emit("recording-started")
 
@@ -174,6 +176,28 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             await self._audio_out.put(
                 PcmAudio(data=payload, sample_rate=self.output_sample_rate, channels=1)
             )
+
+        @client.on("text_delta")
+        async def on_text_delta(data) -> None:
+            text = _extract_text_payload(data)
+            if text:
+                self._saw_text_delta = True
+                await self._text_out.put(text)
+
+        @client.on("text")
+        async def on_text(data) -> None:
+            text = _extract_text_payload(data)
+            if text:
+                self._saw_text_delta = True
+                await self._text_out.put(text)
+
+        @client.on("text_done")
+        async def on_text_done(data) -> None:
+            if self._saw_text_delta:
+                return
+            text = _extract_text_payload(data)
+            if text:
+                await self._text_out.put(text)
 
     async def _send_audio_chunk(self, chunk: bytes) -> None:
         if self._client is None or not self._connected:
@@ -244,3 +268,12 @@ def _socketio_http_url(url: str) -> str:
     if parsed.scheme == "wss":
         return parsed._replace(scheme="https").geturl()
     return url
+
+
+def _extract_text_payload(data) -> str:
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        value = data.get("text")
+        return value if isinstance(value, str) else ""
+    return ""
