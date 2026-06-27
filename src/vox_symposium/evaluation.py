@@ -898,6 +898,7 @@ def _provider_env_snapshot() -> list[str]:
         "FREEZE_OMNI_POST_TURN_POLL_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_POLL_SECONDS", "60.0")),
         "FREEZE_OMNI_POST_TURN_IDLE_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_IDLE_SECONDS", "3.0")),
         "FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS", "160")),
+        "FREEZE_OMNI_STOP_RECORDING_AFTER_TURN=" + _env_value(os.getenv("FREEZE_OMNI_STOP_RECORDING_AFTER_TURN", "true")),
         "",
         "MOSHI_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("MOSHI_REALTIME_URL", ""))),
         "MOSHI_MODEL=" + _env_value(os.getenv("MOSHI_MODEL", "moshi")),

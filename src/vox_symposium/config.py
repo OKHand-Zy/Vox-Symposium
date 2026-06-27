@@ -74,6 +74,7 @@ class Settings:
     freeze_omni_post_turn_poll_seconds: float
     freeze_omni_post_turn_idle_seconds: float
     freeze_omni_post_turn_poll_chunk_ms: int
+    freeze_omni_stop_recording_after_turn: bool
     moshi_protocols: dict[str, MoshiSettings]
 
 
@@ -199,6 +200,10 @@ def load_settings() -> Settings:
         freeze_omni_post_turn_poll_chunk_ms=int_env(
             "FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS",
             160,
+        ),
+        freeze_omni_stop_recording_after_turn=bool_env(
+            "FREEZE_OMNI_STOP_RECORDING_AFTER_TURN",
+            True,
         ),
         moshi_protocols=moshi_protocols,
     )

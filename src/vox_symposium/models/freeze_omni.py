@@ -37,6 +37,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         post_turn_poll_seconds: float = 60.0,
         post_turn_idle_seconds: float = 3.0,
         post_turn_poll_chunk_ms: int = 160,
+        stop_recording_after_turn: bool = True,
     ) -> None:
         super().__init__()
         _validate_socketio_url(url)
@@ -71,6 +72,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self.post_turn_poll_seconds = post_turn_poll_seconds
         self.post_turn_idle_seconds = post_turn_idle_seconds
         self.post_turn_poll_chunk_ms = post_turn_poll_chunk_ms
+        self.stop_recording_after_turn = stop_recording_after_turn
         self._input_chunk_bytes = (
             int(self.input_sample_rate * input_chunk_ms / 1_000) * 2
         )
@@ -278,15 +280,18 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         silence = b"\x00" * self._poll_chunk_bytes
         interval = self.post_turn_poll_chunk_ms / 1_000
         started_at = asyncio.get_running_loop().time()
+        stopped = False
         try:
             while self._connected:
                 now = asyncio.get_running_loop().time()
                 if now - started_at >= self.post_turn_poll_seconds:
+                    stopped = True
                     return
                 if (
                     self._last_audio_at is not None
                     and now - self._last_audio_at >= self.post_turn_idle_seconds
                 ):
+                    stopped = True
                     return
                 await self._send_audio_chunk(silence)
                 await asyncio.sleep(interval)
@@ -294,6 +299,18 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             raise
         except Exception:
             logger.exception("Freeze-Omni post-turn silence polling stopped with an error")
+        finally:
+            if stopped and self.stop_recording_after_turn:
+                await self._emit_recording_stopped()
+
+    async def _emit_recording_stopped(self) -> None:
+        client = self._client
+        if client is None or not self._connected:
+            return
+        try:
+            await client.emit("recording-stopped")
+        except Exception:
+            logger.debug("Failed to send Freeze-Omni recording-stopped", exc_info=True)
 
     async def _stop_post_turn_polling(self) -> None:
         task = self._poll_task

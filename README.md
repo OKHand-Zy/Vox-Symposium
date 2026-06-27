@@ -425,6 +425,7 @@ FREEZE_OMNI_TURN_START_DELAY=1
 FREEZE_OMNI_POST_TURN_IDLE_SECONDS=3
 FREEZE_OMNI_POST_TURN_POLL_SECONDS=60
 FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS=160
+FREEZE_OMNI_STOP_RECORDING_AFTER_TURN=true
 ```
 
 官方 server 預設使用自簽憑證，因此本 adapter 預設 `FREEZE_OMNI_SSL_VERIFY=false`。
@@ -450,7 +451,9 @@ Freeze-Omni 的 `recording-started` event 沒有 ack。Vox 端發出 event 後�
 時就收到新一輪語音。如果 server log 出現一段 `Received PCM data` 之後才看到
 `Recording started`，可以把這個值調大到 `2` 或 `3`。`FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS`
 控制 evaluation 回合結束後用靜音輪詢 queued TTS 的 chunk 大小；預設 `160` ms 可減少
-Socket.IO backlog。
+Socket.IO backlog。Vox 預設會在每個 evaluation turn 輪詢結束後送
+`recording-stopped`，讓 Freeze-Omni 下一輪從乾淨錄音狀態開始；若要關閉此行為，可設
+`FREEZE_OMNI_STOP_RECORDING_AFTER_TURN=false`。
 
 官方 `bin/server.py` 預設只 emit 音訊，不會把生成文字送回 client。若要讓 Vox 同時保存
 Freeze-Omni 的文字 transcript，需要在 Freeze-Omni server 加上 `text_delta` /

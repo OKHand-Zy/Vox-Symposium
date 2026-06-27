@@ -97,6 +97,7 @@ def build_model_from_settings(
             post_turn_poll_seconds=settings.freeze_omni_post_turn_poll_seconds,
             post_turn_idle_seconds=settings.freeze_omni_post_turn_idle_seconds,
             post_turn_poll_chunk_ms=settings.freeze_omni_post_turn_poll_chunk_ms,
+            stop_recording_after_turn=settings.freeze_omni_stop_recording_after_turn,
         )
 
     if provider in MOSHI_PROTOCOL_PROVIDERS:
@@ -189,6 +190,10 @@ def build_model_from_env(
                 3.0,
             ),
             post_turn_poll_chunk_ms=int_env("FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS", 160),
+            stop_recording_after_turn=bool_env(
+                "FREEZE_OMNI_STOP_RECORDING_AFTER_TURN",
+                True,
+            ),
         )
 
     if provider in MOSHI_PROTOCOL_PROVIDERS:
