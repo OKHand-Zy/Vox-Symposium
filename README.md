@@ -415,71 +415,30 @@ pip install -e '.[freeze-omni]'
 ```env
 AGENT_CITIZEN_PROVIDER=gemini
 AGENT_SCHOLAR_PROVIDER=freeze_omni
-FREEZE_OMNI_REALTIME_URL=https://127.0.0.1:7860
+FREEZE_OMNI_REALTIME_URL=https://127.0.0.1:8081
 FREEZE_OMNI_SSL_VERIFY=false
 FREEZE_OMNI_INPUT_CHUNK_MS=20
-FREEZE_OMNI_CONNECT_TIMEOUT=30
-FREEZE_OMNI_CONNECT_RETRIES=5
+FREEZE_OMNI_TURN_START_DELAY=3
+FREEZE_OMNI_TURN_PREROLL_SILENCE_MS=1200
+FREEZE_OMNI_MAX_INPUT_SILENCE_MS=200
+FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD=800
+FREEZE_OMNI_CONNECT_TIMEOUT=60
+FREEZE_OMNI_PROMPT_TIMEOUT=60
+FREEZE_OMNI_CONNECT_RETRIES=10
 FREEZE_OMNI_CONNECT_RETRY_DELAY=5
-FREEZE_OMNI_TURN_START_DELAY=1
-FREEZE_OMNI_TURN_PREROLL_SILENCE_MS=800
-FREEZE_OMNI_MAX_INPUT_SILENCE_MS=40
-FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD=1800
-FREEZE_OMNI_POST_TURN_IDLE_SECONDS=3
 FREEZE_OMNI_POST_TURN_POLL_SECONDS=60
+FREEZE_OMNI_POST_TURN_IDLE_SECONDS=3
 FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS=160
 FREEZE_OMNI_STOP_RECORDING_AFTER_TURN=true
 ```
 
 官方 server 預設使用自簽憑證，因此本 adapter 預設 `FREEZE_OMNI_SSL_VERIFY=false`。
-正式環境如果換成可信任憑證，可以設為 `true`。Freeze-Omni 官方 Socket.IO
-protocol 沒有明確的生成完成 event；Vox 端會在 evaluation 的輸入回合結束後送入短靜音
-來輪詢 queued TTS 音訊，並在最後一段音訊後閒置
-`FREEZE_OMNI_POST_TURN_IDLE_SECONDS` 秒停止輪詢。如果模型輸出間隔較長，請調大
-這個值。
-
-Freeze-Omni server 的 Socket.IO `connect` handler 會初始化 session prompt，GPU 或
-容器環境較慢時可能超過 Python Socket.IO client 預設 namespace wait timeout，導致
-`ConnectionError: One or more namespaces failed to connect`。這時把
-`FREEZE_OMNI_CONNECT_TIMEOUT` 調大，例如 `60`。
-
-官方 server 在 disconnect 時會等待數秒才釋放 `connected_users`。如果 server 以
-`--max_users 1` 啟動，連續跑 dataset 多筆評測時，下一筆可能暫時收到
-`too_many_users`。Vox 會依 `FREEZE_OMNI_CONNECT_RETRIES` 和
-`FREEZE_OMNI_CONNECT_RETRY_DELAY` 自動重試；若 GPU 載入或釋放較慢，可以把 retry delay
-調大，或把 Freeze-Omni server 的 `--max_users` 提高。
-
-Freeze-Omni 的 `recording-started` event 沒有 ack。Vox 端發出 event 後會依
-`FREEZE_OMNI_TURN_START_DELAY` 等待一小段時間再送音訊，避免 server 還在 reset session
-時就收到新一輪語音。如果 server log 出現一段 `Received PCM data` 之後才看到
-`Recording started`，可以把這個值調大到 `2` 或 `3`。`FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS`
-控制 evaluation 回合結束後用靜音輪詢 queued TTS 的 chunk 大小；預設 `160` ms 可減少
-Socket.IO backlog。Vox 預設會在每個 evaluation turn 輪詢結束後送
-`recording-stopped`，讓 Freeze-Omni 下一輪從乾淨錄音狀態開始；若要關閉此行為，可設
-`FREEZE_OMNI_STOP_RECORDING_AFTER_TURN=false`。`FREEZE_OMNI_TURN_PREROLL_SILENCE_MS`
-會在每輪實際語音前送一小段靜音，讓 Freeze-Omni VAD 看到 silence-to-speech transition；
-若後續回合 server 只顯示 `Received PCM data` 但沒有 `Vad start`，可以把它調到 `1200`
-或 `1600`。
-
-Freeze-Omni 對輸入音訊中間的停頓很敏感；若 server log 出現 `Vad start` 後接著
-`Detect invalid break`，但沒有 `Detect break` / `Synthesis` / `Send TTS data`，代表
-server 把前段短語音當成無效回合丟掉了。Vox 預設用
-`FREEZE_OMNI_MAX_INPUT_SILENCE_MS=40` 搭配
-`FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD=1800` 壓短送入 Freeze-Omni 的中段低能量區段，
-降低模型語音回放被 VAD 提早切斷的機率。若想完全保留原始停頓，可把
-`FREEZE_OMNI_MAX_INPUT_SILENCE_MS` 設為 `0`；若語音被切得太緊，可改回 `80` 或
-`120`。
-當 Freeze-Omni 已開始回傳 TTS audio 後，Vox 會停止送入同一輪剩餘的輸入音訊；這可避免
-server 在 `Detect break` 後仍收到尾端語音，立刻再次 `Vad start`，進而讓官方
-`generate` thread 出現 `probability tensor contains either inf, nan or element < 0`。
-若要更早停止輸入，可在 Freeze-Omni server 的 `Detect break` 分支 emit
-`input_audio_stopped`；Vox 收到後會立即停止送該輪剩餘音訊。server 端也建議在
-`generate_thread.start()` 前同步設 `is_generate=True`，並在 `is_generate` 期間不要再把
-新的 client audio 放進 `pcm_fifo_queue`。
+正式環境如果換成可信任憑證，可以設為 `true`。一般 LiveKit participant 會維持連續音訊流；
+evaluation runner 則會啟用固定回合控制，包含 `recording-started` / `recording-stopped`、
+turn 前靜音、輸入靜音壓縮，以及回合結束後用短靜音輪詢 queued TTS 音訊。
 
 官方 `bin/server.py` 預設只 emit 音訊，不會把生成文字送回 client。若要讓 Vox 同時保存
-Freeze-Omni 的文字 transcript，需要在 Freeze-Omni server 加上 `text_delta` /
-`text_done` Socket.IO events；patch 方式請看
+Freeze-Omni 的文字 transcript，或要套用多回合 VAD/reset 的 server patch，請看
 [doc/freeze-omni-text-events.md](doc/freeze-omni-text-events.md)。
 
 Moshi 和 PersonaPlex 走 Moshi 二進位 WebSocket protocol：Vox 送入/接收 24 kHz mono Opus pages，內部轉回 PCM16。使用前先安裝可選依賴：

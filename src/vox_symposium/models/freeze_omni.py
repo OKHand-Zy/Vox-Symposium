@@ -31,18 +31,19 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         instructions: str,
         ssl_verify: bool = False,
         input_chunk_ms: int = 20,
-        connect_timeout: float = 30.0,
-        connect_retries: int = 5,
+        connect_timeout: float = 60.0,
+        connect_retries: int = 10,
         connect_retry_delay: float = 5.0,
-        prompt_timeout: float = 30.0,
-        turn_start_delay: float = 1.0,
-        turn_preroll_silence_ms: int = 800,
-        max_input_silence_ms: int = 40,
-        input_silence_rms_threshold: float = 1800.0,
+        prompt_timeout: float = 60.0,
+        turn_start_delay: float = 3.0,
+        turn_preroll_silence_ms: int = 1200,
+        max_input_silence_ms: int = 200,
+        input_silence_rms_threshold: float = 800.0,
         post_turn_poll_seconds: float = 60.0,
         post_turn_idle_seconds: float = 3.0,
         post_turn_poll_chunk_ms: int = 160,
         stop_recording_after_turn: bool = True,
+        evaluation_turn_taking: bool = False,
     ) -> None:
         super().__init__()
         _validate_socketio_url(url)
@@ -87,6 +88,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self.post_turn_idle_seconds = post_turn_idle_seconds
         self.post_turn_poll_chunk_ms = post_turn_poll_chunk_ms
         self.stop_recording_after_turn = stop_recording_after_turn
+        self.evaluation_turn_taking = evaluation_turn_taking
         self._input_chunk_bytes = (
             int(self.input_sample_rate * input_chunk_ms / 1_000) * 2
         )
@@ -102,9 +104,9 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self._connected = False
         self._prompt_ack: asyncio.Future[None] | None = None
         self._fatal_error: BaseException | None = None
-        self._last_audio_at: float | None = None
+        self._last_output_audio_at: float | None = None
         self._input_closed_by_server = False
-        self._server_output_started = False
+        self._received_output_audio = False
         self._poll_task: asyncio.Task[None] | None = None
         self._saw_text_delta = False
 
@@ -138,7 +140,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
                 self._raise_if_failed()
                 await client.emit("prompt_text", self.instructions)
                 await asyncio.wait_for(self._prompt_ack, timeout=self.prompt_timeout)
-                await client.emit("recording-started")
+                if not self.evaluation_turn_taking:
+                    await client.emit("recording-started")
                 return
             except Exception as exc:
                 error = self._fatal_error or exc
@@ -178,9 +181,9 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         await self._stop_post_turn_polling()
         self._input_buffer.clear()
         self._input_silence_bytes = 0
-        self._last_audio_at = None
+        self._last_output_audio_at = None
         self._input_closed_by_server = False
-        self._server_output_started = False
+        self._received_output_audio = False
         self._saw_text_delta = False
         if self._connected and self._client is not None:
             await self._client.emit("recording-started")
@@ -194,6 +197,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             chunk = bytes(self._input_buffer)
             self._input_buffer.clear()
             await self._send_input_audio_chunk(chunk)
+        if not self.evaluation_turn_taking:
+            return
         await self._stop_post_turn_polling()
         self._poll_task = asyncio.create_task(
             self._poll_with_silence(),
@@ -231,15 +236,11 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
 
         @client.on("stop_tts")
         async def on_stop_tts(_data=None) -> None:
-            if self._server_output_started:
-                self._last_audio_at = asyncio.get_running_loop().time()
+            if self._received_output_audio:
+                self._last_output_audio_at = asyncio.get_running_loop().time()
 
         @client.on("input_audio_stopped")
         async def on_input_audio_stopped(_data=None) -> None:
-            self._input_closed_by_server = True
-
-        @client.on("turn_detected")
-        async def on_turn_detected(_data=None) -> None:
             self._input_closed_by_server = True
 
         @client.on("audio")
@@ -250,21 +251,14 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
                 payload = bytes(data)
             if not payload:
                 return
-            self._last_audio_at = asyncio.get_running_loop().time()
-            self._server_output_started = True
+            self._last_output_audio_at = asyncio.get_running_loop().time()
+            self._received_output_audio = True
             await self._audio_out.put(
                 PcmAudio(data=payload, sample_rate=self.output_sample_rate, channels=1)
             )
 
         @client.on("text_delta")
         async def on_text_delta(data) -> None:
-            text = _extract_text_payload(data)
-            if text:
-                self._saw_text_delta = True
-                await self._text_out.put(text)
-
-        @client.on("text")
-        async def on_text(data) -> None:
             text = _extract_text_payload(data)
             if text:
                 self._saw_text_delta = True
@@ -279,7 +273,10 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
                 await self._text_out.put(text)
 
     async def _send_input_audio_chunk(self, chunk: bytes) -> None:
-        if self._input_closed_by_server or self._server_output_started:
+        if not self.evaluation_turn_taking:
+            await self._send_audio_chunk(chunk)
+            return
+        if self._input_closed_by_server or self._received_output_audio:
             await self._send_audio_chunk(b"\x00" * len(chunk))
             return
         if not self._should_send_input_chunk(chunk):
@@ -342,8 +339,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
                     stopped = True
                     return
                 if (
-                    self._last_audio_at is not None
-                    and now - self._last_audio_at >= self.post_turn_idle_seconds
+                    self._last_output_audio_at is not None
+                    and now - self._last_output_audio_at >= self.post_turn_idle_seconds
                 ):
                     stopped = True
                     return

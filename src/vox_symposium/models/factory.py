@@ -101,6 +101,7 @@ def build_model_from_settings(
             post_turn_idle_seconds=settings.freeze_omni_post_turn_idle_seconds,
             post_turn_poll_chunk_ms=settings.freeze_omni_post_turn_poll_chunk_ms,
             stop_recording_after_turn=settings.freeze_omni_stop_recording_after_turn,
+            evaluation_turn_taking=evaluation_mode,
         )
 
     if provider in MOSHI_PROTOCOL_PROVIDERS:
@@ -179,16 +180,16 @@ def build_model_from_env(
             instructions=instructions,
             ssl_verify=bool_env("FREEZE_OMNI_SSL_VERIFY", False),
             input_chunk_ms=int_env("FREEZE_OMNI_INPUT_CHUNK_MS", 20),
-            connect_timeout=float_env("FREEZE_OMNI_CONNECT_TIMEOUT", 30.0),
-            connect_retries=int_env("FREEZE_OMNI_CONNECT_RETRIES", 5),
+            connect_timeout=float_env("FREEZE_OMNI_CONNECT_TIMEOUT", 60.0),
+            connect_retries=int_env("FREEZE_OMNI_CONNECT_RETRIES", 10),
             connect_retry_delay=float_env("FREEZE_OMNI_CONNECT_RETRY_DELAY", 5.0),
-            prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 30.0),
-            turn_start_delay=float_env("FREEZE_OMNI_TURN_START_DELAY", 1.0),
-            turn_preroll_silence_ms=int_env("FREEZE_OMNI_TURN_PREROLL_SILENCE_MS", 800),
-            max_input_silence_ms=int_env("FREEZE_OMNI_MAX_INPUT_SILENCE_MS", 40),
+            prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 60.0),
+            turn_start_delay=float_env("FREEZE_OMNI_TURN_START_DELAY", 3.0),
+            turn_preroll_silence_ms=int_env("FREEZE_OMNI_TURN_PREROLL_SILENCE_MS", 1200),
+            max_input_silence_ms=int_env("FREEZE_OMNI_MAX_INPUT_SILENCE_MS", 200),
             input_silence_rms_threshold=float_env(
                 "FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD",
-                1800.0,
+                800.0,
             ),
             post_turn_poll_seconds=float_env(
                 "FREEZE_OMNI_POST_TURN_POLL_SECONDS",
@@ -203,6 +204,7 @@ def build_model_from_env(
                 "FREEZE_OMNI_STOP_RECORDING_AFTER_TURN",
                 True,
             ),
+            evaluation_turn_taking=evaluation_mode,
         )
 
     if provider in MOSHI_PROTOCOL_PROVIDERS:

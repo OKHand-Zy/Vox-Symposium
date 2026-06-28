@@ -16,26 +16,28 @@ Vox Symposium 會透過 `RealtimeAudioModel.receive_text()` 消費 `text_delta`�
 
 ## Vox `.env` 參數
 
-以下是 Vox Symposium 端支援的 `FREEZE_OMNI_*` 設定。右欄的穩定測試值是目前
-在 `two_test_dataset` 前 3 筆、每段最多 90 秒的 smoke test 中可完整跑完的設定。
+以下是 Vox Symposium 端支援的 `FREEZE_OMNI_*` 設定。表格中的值是目前程式預設值，
+也是在 `two_test_dataset` 前 3 筆、每段最多 90 秒的 smoke test 中可完整跑完的建議值。
+一般 LiveKit participant 會維持連續音訊流；turn 前靜音、輸入靜音壓縮與 post-turn
+silence polling 只會在 evaluation runner 的固定回合模式中啟用。
 
-| 參數 | 預設值 | 穩定測試值 | 說明 |
-| --- | --- | --- | --- |
-| `FREEZE_OMNI_REALTIME_URL` | 無 | `https://127.0.0.1:8081` | Freeze-Omni Real-Time Interactive Flask-SocketIO server 的網址。使用 `provider=freeze_omni` 時必填。若 server 跑在遠端機器，請填 tunnel 或可連線的 host。 |
-| `FREEZE_OMNI_SSL_VERIFY` | `false` | `false` | 是否驗證 HTTPS 憑證。官方 demo 常用自簽憑證，所以本專案預設關閉驗證。若你改用正式憑證，才設為 `true`。 |
-| `FREEZE_OMNI_INPUT_CHUNK_MS` | `20` | `20` | Vox 送入 Freeze-Omni 的 audio packet 長度。20 ms 比較貼近 realtime demo 的互動節奏，不建議大幅調高。 |
-| `FREEZE_OMNI_TURN_START_DELAY` | `1` | `3` | 每輪送 `recording-started` 後，等待幾秒才開始送音訊。遠端 server 或 GPU reset 慢時可調高，避免音訊太早進 server。 |
-| `FREEZE_OMNI_TURN_PREROLL_SILENCE_MS` | `800` | `1200` | 每輪正式語音前先送的靜音長度。用來讓官方 server 的錄音/VAD 狀態進入穩定狀態。若第二輪只看到 PCM 但沒有 `Vad start`，可調高。 |
-| `FREEZE_OMNI_MAX_INPUT_SILENCE_MS` | `40` | `200` | Vox 在使用者語音中段最多保留多少低能量靜音。設為 `0` 代表不壓縮靜音。太低可能讓 Freeze-Omni 判成 `Detect invalid break`；太高則可能讓 turn endpoint 變慢。 |
-| `FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD` | `1800` | `800` | 判斷 input chunk 是否為靜音的 PCM16 RMS 門檻。低於此值會被視為低能量靜音，並受 `FREEZE_OMNI_MAX_INPUT_SILENCE_MS` 限制。門檻太高可能切掉正常語音尾音。 |
-| `FREEZE_OMNI_CONNECT_TIMEOUT` | `30` | `60` | Socket.IO 連線 timeout 秒數。Freeze-Omni 載入模型或遠端 tunnel 較慢時建議調高。 |
-| `FREEZE_OMNI_PROMPT_TIMEOUT` | `30` | `60` | 送出 prompt 後等待 server 回 `prompt_success` 的 timeout 秒數。server 忙碌或網路慢時可調高。 |
-| `FREEZE_OMNI_CONNECT_RETRIES` | `5` | `10` | 若 server 回 `too_many_users`，Vox 會重試連線的次數。`--max_users 1` 且連續跑多個 case 時很有用。 |
-| `FREEZE_OMNI_CONNECT_RETRY_DELAY` | `5` | `5` | 每次連線重試之間等待幾秒。若 server 釋放 session 很慢，可調高。 |
-| `FREEZE_OMNI_POST_TURN_POLL_SECONDS` | `60` | `60` | Vox 結束送入使用者語音後，最多繼續送靜音 polling 幾秒。官方 server 需要 client 持續送 audio event 才會 flush TTS audio。 |
-| `FREEZE_OMNI_POST_TURN_IDLE_SECONDS` | `3` | `3` | 已收到 Freeze-Omni 輸出音訊後，若連續幾秒沒有新音訊，就視為該輪輸出結束。模型輸出間隔長時可調高。 |
-| `FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS` | `160` | `160` | post-turn silence polling 的每個靜音 chunk 長度。太大會降低 flush 反應速度，太小會增加 Socket.IO event 數量。 |
-| `FREEZE_OMNI_STOP_RECORDING_AFTER_TURN` | `true` | `true` | post-turn polling 結束後是否送 `recording-stopped`。一般評測建議維持 `true`，讓官方 server 每輪重置狀態。 |
+| 參數 | 預設/建議值 | 說明 |
+| --- | --- | --- |
+| `FREEZE_OMNI_REALTIME_URL` | 無 | Freeze-Omni Real-Time Interactive Flask-SocketIO server 的網址。使用 `provider=freeze_omni` 時必填。若 server 跑在遠端機器，請填 tunnel 或可連線的 host。 |
+| `FREEZE_OMNI_SSL_VERIFY` | `false` | 是否驗證 HTTPS 憑證。官方 demo 常用自簽憑證，所以本專案預設關閉驗證。若你改用正式憑證，才設為 `true`。 |
+| `FREEZE_OMNI_INPUT_CHUNK_MS` | `20` | Vox 送入 Freeze-Omni 的 audio packet 長度。20 ms 比較貼近 realtime demo 的互動節奏，不建議大幅調高。 |
+| `FREEZE_OMNI_TURN_START_DELAY` | `3` | evaluation 每輪送 `recording-started` 後，等待幾秒才開始送音訊。遠端 server 或 GPU reset 慢時可調高，避免音訊太早進 server。 |
+| `FREEZE_OMNI_TURN_PREROLL_SILENCE_MS` | `1200` | evaluation 每輪正式語音前先送的靜音長度。用來讓官方 server 的錄音/VAD 狀態進入穩定狀態。若第二輪只看到 PCM 但沒有 `Vad start`，可調高。 |
+| `FREEZE_OMNI_MAX_INPUT_SILENCE_MS` | `200` | evaluation 在使用者語音中段最多保留多少低能量靜音。設為 `0` 代表不壓縮靜音。太低可能讓 Freeze-Omni 判成 `Detect invalid break`；太高則可能讓 turn endpoint 變慢。 |
+| `FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD` | `800` | evaluation 判斷 input chunk 是否為靜音的 PCM16 RMS 門檻。低於此值會被視為低能量靜音，並受 `FREEZE_OMNI_MAX_INPUT_SILENCE_MS` 限制。門檻太高可能切掉正常語音尾音。 |
+| `FREEZE_OMNI_CONNECT_TIMEOUT` | `60` | Socket.IO 連線 timeout 秒數。Freeze-Omni 載入模型或遠端 tunnel 較慢時可調高。 |
+| `FREEZE_OMNI_PROMPT_TIMEOUT` | `60` | 送出 prompt 後等待 server 回 `prompt_success` 的 timeout 秒數。server 忙碌或網路慢時可調高。 |
+| `FREEZE_OMNI_CONNECT_RETRIES` | `10` | 若 server 回 `too_many_users`，Vox 會重試連線的次數。`--max_users 1` 且連續跑多個 case 時很有用。 |
+| `FREEZE_OMNI_CONNECT_RETRY_DELAY` | `5` | 每次連線重試之間等待幾秒。若 server 釋放 session 很慢，可調高。 |
+| `FREEZE_OMNI_POST_TURN_POLL_SECONDS` | `60` | evaluation 結束送入使用者語音後，最多繼續送靜音 polling 幾秒。官方 server 需要 client 持續送 audio event 才會 flush TTS audio。 |
+| `FREEZE_OMNI_POST_TURN_IDLE_SECONDS` | `3` | evaluation 已收到 Freeze-Omni 輸出音訊後，若連續幾秒沒有新音訊，就視為該輪輸出結束。模型輸出間隔長時可調高。 |
+| `FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS` | `160` | evaluation post-turn silence polling 的每個靜音 chunk 長度。太大會降低 flush 反應速度，太小會增加 Socket.IO event 數量。 |
+| `FREEZE_OMNI_STOP_RECORDING_AFTER_TURN` | `true` | evaluation post-turn polling 結束後是否送 `recording-stopped`。一般評測建議維持 `true`，讓官方 server 每輪重置狀態。 |
 
 目前建議 `.env` 範例如下：
 

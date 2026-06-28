@@ -6,14 +6,41 @@
 
 | Provider | Wire protocol | 適用情境 |
 | --- | --- | --- |
+| `freeze_omni` | 官方 Real-Time Interactive Demo server 的 Flask-SocketIO；client 送 JSON PCM16 audio，server 回 24 kHz mono PCM16 audio event | 直接連自架 Freeze-Omni server；文字事件與多回合 VAD patch 見 [Freeze-Omni 文字事件與多回合 VAD patch](freeze-omni-text-events.md) |
 | `moshi` | Kyutai 官方 `/api/chat` 二進位 WebSocket；24 kHz mono Ogg Opus pages | 直接連 Moshi server |
 | `personaplex` | PersonaPlex live server 的 Moshi `/api/chat` 二進位 WebSocket；24 kHz mono Ogg Opus pages | 直接連 PersonaPlex server；部署與 patch 見 [PersonaPlex live server](personaplex-live-server.md) |
 
-Moshi adapter 需要額外安裝：
+依 provider 安裝可選依賴：
 
 ```bash
+pip install -e '.[freeze-omni]'
 pip install -e '.[moshi]'
 ```
+
+## Freeze-Omni Flask-SocketIO provider
+
+`freeze_omni` 連接官方 VITA-MLLM Freeze-Omni Real-Time Interactive Demo server。
+Vox 只透過 Socket.IO 送入音訊與接收音訊，不會在主流程載入 Freeze-Omni 權重。
+
+基本設定：
+
+```env
+AGENT_SCHOLAR_PROVIDER=freeze_omni
+FREEZE_OMNI_REALTIME_URL=https://127.0.0.1:8081
+FREEZE_OMNI_SSL_VERIFY=false
+```
+
+官方 demo server 通常使用自簽 HTTPS 憑證，因此本 adapter 預設
+`FREEZE_OMNI_SSL_VERIFY=false`。正式環境如果換成可信任憑證，可以設為 `true`。
+
+一般 LiveKit participant 使用 Freeze-Omni 時會維持連續音訊流。evaluation runner
+才會啟用固定回合控制，包括 `recording-started` / `recording-stopped`、turn 前靜音、
+輸入靜音壓縮，以及回合結束後用短靜音輪詢 queued TTS 音訊。這些參數集中記錄在
+[Freeze-Omni 文字事件與多回合 VAD patch](freeze-omni-text-events.md)。
+
+官方 `bin/server.py` 預設只 emit 合成音訊，不會把生成文字送回 client。若要讓 Vox
+同時保存 Freeze-Omni 的語音與文字 transcript，或要讓多回合 evaluation 更穩定，請套用
+[Freeze-Omni 文字事件與多回合 VAD patch](freeze-omni-text-events.md) 中的 server patch。
 
 ## Moshi protocol providers
 
@@ -37,6 +64,7 @@ Vox 的 Moshi adapter 會等待 server handshake bytes 後才讓 evaluation 開�
 ## Provider-specific docs
 
 - [PersonaPlex live server](personaplex-live-server.md)：部署、voice prompt、`text_prompt`、handshake、server patch 與已知錯誤。
+- [Freeze-Omni 文字事件與多回合 VAD patch](freeze-omni-text-events.md)：Freeze-Omni `.env` 參數、文字事件、VAD reset 與 server patch。
 - [MiniCPM-o 4.5 deployment](minicpm-o-4_5-deployment.md)：MiniCPM-o 4.5 Audio Full-Duplex Gateway 非 Docker 部署。
 - [Local Hugging Face realtime model](local-hf-realtime-model.md)：新增其他本地 Hugging Face realtime model adapter 的建議。
 
@@ -49,7 +77,7 @@ opening 的處理依 agent 分開：
 - opening speaker 的 prompt 會包含完整 history 到最後 1 句，因為這句是該 agent 已經說過的內容。
 - opening receiver 的 prompt 只到 history 最後 -1 句，因為最後一句 opening 會以音訊送進 receiver。
 
-這個規則適用 OpenAI、Gemini、MiniCPM、Moshi 和 PersonaPlex。
+這個規則適用 OpenAI、Gemini、MiniCPM、Freeze-Omni、Moshi 和 PersonaPlex。
 
 ## 設計注意事項
 
