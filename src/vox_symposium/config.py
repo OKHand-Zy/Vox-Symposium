@@ -72,6 +72,8 @@ class Settings:
     freeze_omni_prompt_timeout: float
     freeze_omni_turn_start_delay: float
     freeze_omni_turn_preroll_silence_ms: int
+    freeze_omni_max_input_silence_ms: int
+    freeze_omni_input_silence_rms_threshold: float
     freeze_omni_post_turn_poll_seconds: float
     freeze_omni_post_turn_idle_seconds: float
     freeze_omni_post_turn_poll_chunk_ms: int
@@ -193,6 +195,14 @@ def load_settings() -> Settings:
         freeze_omni_turn_preroll_silence_ms=int_env(
             "FREEZE_OMNI_TURN_PREROLL_SILENCE_MS",
             800,
+        ),
+        freeze_omni_max_input_silence_ms=int_env(
+            "FREEZE_OMNI_MAX_INPUT_SILENCE_MS",
+            40,
+        ),
+        freeze_omni_input_silence_rms_threshold=float_env(
+            "FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD",
+            1800.0,
         ),
         freeze_omni_post_turn_poll_seconds=float_env(
             "FREEZE_OMNI_POST_TURN_POLL_SECONDS",

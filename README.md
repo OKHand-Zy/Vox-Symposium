@@ -423,6 +423,8 @@ FREEZE_OMNI_CONNECT_RETRIES=5
 FREEZE_OMNI_CONNECT_RETRY_DELAY=5
 FREEZE_OMNI_TURN_START_DELAY=1
 FREEZE_OMNI_TURN_PREROLL_SILENCE_MS=800
+FREEZE_OMNI_MAX_INPUT_SILENCE_MS=40
+FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD=1800
 FREEZE_OMNI_POST_TURN_IDLE_SECONDS=3
 FREEZE_OMNI_POST_TURN_POLL_SECONDS=60
 FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS=160
@@ -458,6 +460,22 @@ Socket.IO backlog。Vox 預設會在每個 evaluation turn 輪詢結束後送
 會在每輪實際語音前送一小段靜音，讓 Freeze-Omni VAD 看到 silence-to-speech transition；
 若後續回合 server 只顯示 `Received PCM data` 但沒有 `Vad start`，可以把它調到 `1200`
 或 `1600`。
+
+Freeze-Omni 對輸入音訊中間的停頓很敏感；若 server log 出現 `Vad start` 後接著
+`Detect invalid break`，但沒有 `Detect break` / `Synthesis` / `Send TTS data`，代表
+server 把前段短語音當成無效回合丟掉了。Vox 預設用
+`FREEZE_OMNI_MAX_INPUT_SILENCE_MS=40` 搭配
+`FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD=1800` 壓短送入 Freeze-Omni 的中段低能量區段，
+降低模型語音回放被 VAD 提早切斷的機率。若想完全保留原始停頓，可把
+`FREEZE_OMNI_MAX_INPUT_SILENCE_MS` 設為 `0`；若語音被切得太緊，可改回 `80` 或
+`120`。
+當 Freeze-Omni 已開始回傳 TTS audio 後，Vox 會停止送入同一輪剩餘的輸入音訊；這可避免
+server 在 `Detect break` 後仍收到尾端語音，立刻再次 `Vad start`，進而讓官方
+`generate` thread 出現 `probability tensor contains either inf, nan or element < 0`。
+若要更早停止輸入，可在 Freeze-Omni server 的 `Detect break` 分支 emit
+`input_audio_stopped`；Vox 收到後會立即停止送該輪剩餘音訊。server 端也建議在
+`generate_thread.start()` 前同步設 `is_generate=True`，並在 `is_generate` 期間不要再把
+新的 client audio 放進 `pcm_fifo_queue`。
 
 官方 `bin/server.py` 預設只 emit 音訊，不會把生成文字送回 client。若要讓 Vox 同時保存
 Freeze-Omni 的文字 transcript，需要在 Freeze-Omni server 加上 `text_delta` /

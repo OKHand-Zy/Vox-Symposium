@@ -896,6 +896,8 @@ def _provider_env_snapshot() -> list[str]:
         "FREEZE_OMNI_PROMPT_TIMEOUT=" + _env_value(os.getenv("FREEZE_OMNI_PROMPT_TIMEOUT", "30.0")),
         "FREEZE_OMNI_TURN_START_DELAY=" + _env_value(os.getenv("FREEZE_OMNI_TURN_START_DELAY", "1.0")),
         "FREEZE_OMNI_TURN_PREROLL_SILENCE_MS=" + _env_value(os.getenv("FREEZE_OMNI_TURN_PREROLL_SILENCE_MS", "800")),
+        "FREEZE_OMNI_MAX_INPUT_SILENCE_MS=" + _env_value(os.getenv("FREEZE_OMNI_MAX_INPUT_SILENCE_MS", "40")),
+        "FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD=" + _env_value(os.getenv("FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD", "1800.0")),
         "FREEZE_OMNI_POST_TURN_POLL_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_POLL_SECONDS", "60.0")),
         "FREEZE_OMNI_POST_TURN_IDLE_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_IDLE_SECONDS", "3.0")),
         "FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS", "160")),

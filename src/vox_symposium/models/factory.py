@@ -95,6 +95,8 @@ def build_model_from_settings(
             prompt_timeout=settings.freeze_omni_prompt_timeout,
             turn_start_delay=settings.freeze_omni_turn_start_delay,
             turn_preroll_silence_ms=settings.freeze_omni_turn_preroll_silence_ms,
+            max_input_silence_ms=settings.freeze_omni_max_input_silence_ms,
+            input_silence_rms_threshold=settings.freeze_omni_input_silence_rms_threshold,
             post_turn_poll_seconds=settings.freeze_omni_post_turn_poll_seconds,
             post_turn_idle_seconds=settings.freeze_omni_post_turn_idle_seconds,
             post_turn_poll_chunk_ms=settings.freeze_omni_post_turn_poll_chunk_ms,
@@ -183,6 +185,11 @@ def build_model_from_env(
             prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 30.0),
             turn_start_delay=float_env("FREEZE_OMNI_TURN_START_DELAY", 1.0),
             turn_preroll_silence_ms=int_env("FREEZE_OMNI_TURN_PREROLL_SILENCE_MS", 800),
+            max_input_silence_ms=int_env("FREEZE_OMNI_MAX_INPUT_SILENCE_MS", 40),
+            input_silence_rms_threshold=float_env(
+                "FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD",
+                1800.0,
+            ),
             post_turn_poll_seconds=float_env(
                 "FREEZE_OMNI_POST_TURN_POLL_SECONDS",
                 60.0,

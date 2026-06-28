@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from array import array
 import json
 import logging
+import sys
 from urllib.parse import urlsplit
 
 from vox_symposium.audio import PcmAudio, normalize_audio
@@ -35,6 +37,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         prompt_timeout: float = 30.0,
         turn_start_delay: float = 1.0,
         turn_preroll_silence_ms: int = 800,
+        max_input_silence_ms: int = 40,
+        input_silence_rms_threshold: float = 1800.0,
         post_turn_poll_seconds: float = 60.0,
         post_turn_idle_seconds: float = 3.0,
         post_turn_poll_chunk_ms: int = 160,
@@ -56,6 +60,10 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             raise ValueError("Freeze-Omni turn start delay cannot be negative")
         if turn_preroll_silence_ms < 0:
             raise ValueError("Freeze-Omni turn preroll silence cannot be negative")
+        if max_input_silence_ms < 0:
+            raise ValueError("Freeze-Omni max input silence cannot be negative")
+        if input_silence_rms_threshold < 0:
+            raise ValueError("Freeze-Omni input silence RMS threshold cannot be negative")
         if post_turn_poll_seconds <= 0:
             raise ValueError("Freeze-Omni post-turn poll duration must be positive")
         if post_turn_idle_seconds <= 0:
@@ -73,6 +81,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self.prompt_timeout = prompt_timeout
         self.turn_start_delay = turn_start_delay
         self.turn_preroll_silence_ms = turn_preroll_silence_ms
+        self.max_input_silence_ms = max_input_silence_ms
+        self.input_silence_rms_threshold = input_silence_rms_threshold
         self.post_turn_poll_seconds = post_turn_poll_seconds
         self.post_turn_idle_seconds = post_turn_idle_seconds
         self.post_turn_poll_chunk_ms = post_turn_poll_chunk_ms
@@ -83,12 +93,18 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self._poll_chunk_bytes = (
             int(self.input_sample_rate * post_turn_poll_chunk_ms / 1_000) * 2
         )
+        self._max_input_silence_bytes = (
+            int(self.input_sample_rate * max_input_silence_ms / 1_000) * 2
+        )
         self._input_buffer = bytearray()
+        self._input_silence_bytes = 0
         self._client = None
         self._connected = False
         self._prompt_ack: asyncio.Future[None] | None = None
         self._fatal_error: BaseException | None = None
         self._last_audio_at: float | None = None
+        self._input_closed_by_server = False
+        self._server_output_started = False
         self._poll_task: asyncio.Task[None] | None = None
         self._saw_text_delta = False
 
@@ -156,12 +172,15 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         while len(self._input_buffer) >= self._input_chunk_bytes:
             chunk = bytes(self._input_buffer[: self._input_chunk_bytes])
             del self._input_buffer[: self._input_chunk_bytes]
-            await self._send_audio_chunk(chunk)
+            await self._send_input_audio_chunk(chunk)
 
     async def start_audio_turn(self) -> None:
         await self._stop_post_turn_polling()
         self._input_buffer.clear()
+        self._input_silence_bytes = 0
         self._last_audio_at = None
+        self._input_closed_by_server = False
+        self._server_output_started = False
         self._saw_text_delta = False
         if self._connected and self._client is not None:
             await self._client.emit("recording-started")
@@ -174,7 +193,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         if self._input_buffer:
             chunk = bytes(self._input_buffer)
             self._input_buffer.clear()
-            await self._send_audio_chunk(chunk)
+            await self._send_input_audio_chunk(chunk)
         await self._stop_post_turn_polling()
         self._poll_task = asyncio.create_task(
             self._poll_with_silence(),
@@ -212,7 +231,16 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
 
         @client.on("stop_tts")
         async def on_stop_tts(_data=None) -> None:
-            self._last_audio_at = asyncio.get_running_loop().time()
+            if self._server_output_started:
+                self._last_audio_at = asyncio.get_running_loop().time()
+
+        @client.on("input_audio_stopped")
+        async def on_input_audio_stopped(_data=None) -> None:
+            self._input_closed_by_server = True
+
+        @client.on("turn_detected")
+        async def on_turn_detected(_data=None) -> None:
+            self._input_closed_by_server = True
 
         @client.on("audio")
         async def on_audio(data) -> None:
@@ -223,6 +251,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             if not payload:
                 return
             self._last_audio_at = asyncio.get_running_loop().time()
+            self._server_output_started = True
             await self._audio_out.put(
                 PcmAudio(data=payload, sample_rate=self.output_sample_rate, channels=1)
             )
@@ -248,6 +277,25 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             text = _extract_text_payload(data)
             if text:
                 await self._text_out.put(text)
+
+    async def _send_input_audio_chunk(self, chunk: bytes) -> None:
+        if self._input_closed_by_server or self._server_output_started:
+            await self._send_audio_chunk(b"\x00" * len(chunk))
+            return
+        if not self._should_send_input_chunk(chunk):
+            return
+        await self._send_audio_chunk(chunk)
+
+    def _should_send_input_chunk(self, chunk: bytes) -> bool:
+        if self._max_input_silence_bytes <= 0:
+            return True
+        if _pcm16_rms(chunk) >= self.input_silence_rms_threshold:
+            self._input_silence_bytes = 0
+            return True
+        if self._input_silence_bytes >= self._max_input_silence_bytes:
+            return False
+        self._input_silence_bytes += len(chunk)
+        return True
 
     async def _send_audio_chunk(self, chunk: bytes) -> None:
         if self._client is None or not self._connected:
@@ -374,3 +422,15 @@ def _extract_text_payload(data) -> str:
         value = data.get("text")
         return value if isinstance(value, str) else ""
     return ""
+
+
+def _pcm16_rms(data: bytes) -> float:
+    if not data:
+        return 0.0
+    samples = array("h")
+    samples.frombytes(data[: len(data) - (len(data) % 2)])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return 0.0
+    return (sum(sample * sample for sample in samples) / len(samples)) ** 0.5
