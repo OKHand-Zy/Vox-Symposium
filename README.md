@@ -208,6 +208,19 @@ python3 -m vox_symposium.evaluation \
 
 `--audio-speed 1` 是 real-time 速度，也是預設值。數字越大，runner 越快把音訊送給另一個模型，較不容易因整體評測時間太長而斷線；但高於 real-time 可能影響 streaming VAD / turn detection，因此正式比較建議固定並記錄這個參數。
 
+如果整批 dataset 中途斷掉，可以用 `--start-index` 從指定的 zero-based case index 繼續跑。例：log 顯示停在 `Running scenario 7/185` 時，下一次從第 7 筆重跑要用 `--start-index 6`：
+
+```bash
+python3 -m vox_symposium.evaluation \
+  data/scenarios/two_test_dataset.json \
+  data/results/two_Gemini-Gemini-resume.json \
+  --run-id two_Gemini-Gemini \
+  --dialogue-turns 10 \
+  --start-index 6
+```
+
+每完成一筆 case，runner 會立刻更新 artifacts 目錄下的 `summary.json`；從中段開始跑時，summary 裡的 `index` 仍會保留原始 dataset 的 zero-based index。
+
 **6. 評測輸出**
 
 主要 result：

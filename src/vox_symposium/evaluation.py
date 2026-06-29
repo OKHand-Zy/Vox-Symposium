@@ -90,11 +90,13 @@ async def _run_evaluations(
             dialogue_turns=args.dialogue_turns,
         )
     ]
+    loaded_total = len(scenarios)
     scenarios = _limit_scenarios(
         scenarios,
         limit=args.limit,
         scenario_id=args.scenario_id,
         scenario_index=args.scenario_index,
+        start_index=args.start_index,
     )
     if not scenarios:
         raise RuntimeError("No scenarios found")
@@ -103,10 +105,13 @@ async def _run_evaluations(
 
     env_snapshot_path = _write_run_env_snapshot(artifact_root, run_id=base_run_id, args=args)
 
-    results: list[dict[str, Any]] = []
-    total = len(scenarios)
+    start_index = args.start_index or 0
+    total = loaded_total if start_index else len(scenarios)
+    results = _load_resume_results(result_path, start_index=start_index)
     if total > 1 and args.answer_audio:
         raise RuntimeError("--answer-audio can only be used when one scenario is selected with --id or --index")
+    if results:
+        print(f"Loaded {len(results)} completed result(s) before --start-index {start_index}: {result_path}")
 
     _write_summary_report(
         summary_path,
@@ -120,14 +125,15 @@ async def _run_evaluations(
         total_cases=total,
     )
     print("==========")
-    for index, scenario in enumerate(scenarios):
+    for selected_index, scenario in enumerate(scenarios):
+        index = start_index + selected_index
         run_id = _scenario_run_id(base_run_id, scenario.data, index=index, total=total)
-        if index > 0:
+        if selected_index > 0:
             print("----------")
         if total > 1:
             print(f"Running scenario {index + 1}/{total}: {scenario.id} (run_id={run_id})")
 
-        result = await _run_scenario_evaluation(
+        result = await _run_scenario_with_retries(
             args,
             scenario=scenario,
             run_id=run_id,
@@ -136,6 +142,8 @@ async def _run_evaluations(
         )
         result["artifacts"]["console_log"] = str(console_log_path)
         result["artifacts"]["summary"] = str(summary_path)
+        result["case_index"] = index
+        result["case_number"] = index + 1
         results.append(result)
         write_evaluation_result(result_path, _result_payload(results, total=total))
         _write_summary_report(
@@ -164,6 +172,46 @@ async def _run_evaluations(
                 f"choice={response['choice'] or 'unknown'}, "
                 f"is_correct={response['is_correct']})"
             )
+
+
+async def _run_scenario_with_retries(
+    args: argparse.Namespace,
+    *,
+    scenario: LoadedScenario,
+    run_id: str,
+    artifact_root: Path,
+    env_snapshot_path: Path,
+) -> dict[str, Any]:
+    attempts = args.case_retries
+    if attempts < 1:
+        raise RuntimeError("--case-retries must be at least 1")
+    if args.case_retry_delay < 0:
+        raise RuntimeError("--case-retry-delay must be at least 0")
+
+    for attempt in range(1, attempts + 1):
+        try:
+            if attempt > 1:
+                print(f"Retrying scenario {scenario.id}: attempt {attempt}/{attempts}")
+            return await _run_scenario_evaluation(
+                args,
+                scenario=scenario,
+                run_id=run_id,
+                artifact_root=artifact_root,
+                env_snapshot_path=env_snapshot_path,
+            )
+        except Exception as exc:
+            _remove_failed_case_artifacts(artifact_root, scenario.data)
+            if attempt >= attempts:
+                print(f"Scenario {scenario.id} failed after {attempts} attempt(s)")
+                raise
+            print(
+                f"Scenario {scenario.id} failed on attempt {attempt}/{attempts}: "
+                f"{_format_error(exc)}"
+            )
+            print(f"Deleted failed case artifacts; retrying in {args.case_retry_delay:.1f}s")
+            await asyncio.sleep(args.case_retry_delay)
+
+    raise RuntimeError(f"Scenario {scenario.id} failed after {attempts} attempt(s)")
 
 
 async def _run_scenario_evaluation(
@@ -620,26 +668,80 @@ def _scenario_run_id(base_run_id: str, scenario: dict[str, Any], *, index: int, 
     return f"{base_run_id}-{index + 1:04d}-{_safe_path_segment(_scenario_row_id(scenario))}"
 
 
+def _remove_failed_case_artifacts(artifact_root: Path, scenario: dict[str, Any]) -> None:
+    artifact_dir = _scenario_artifact_dir(artifact_root, scenario)
+    if not artifact_dir.exists():
+        return
+
+    root = artifact_root.resolve()
+    target = artifact_dir.resolve()
+    if target == root or not target.is_relative_to(root):
+        raise RuntimeError(f"Refusing to delete case artifacts outside artifact root: {artifact_dir}")
+
+    shutil.rmtree(artifact_dir)
+    print(f"Deleted failed case artifact directory: {artifact_dir}")
+
+
 def _limit_scenarios(
     scenarios: list[LoadedScenario],
     *,
     limit: int | None,
     scenario_id: str | None,
     scenario_index: int | None,
+    start_index: int = 0,
 ) -> list[LoadedScenario]:
-    if limit is None:
-        return scenarios
-    if limit < 1:
+    if start_index < 0:
+        raise RuntimeError("--start-index must be at least 0")
+    if limit is not None and limit < 1:
         raise RuntimeError("--limit must be at least 1")
     if scenario_id is not None or scenario_index is not None:
-        raise RuntimeError("--limit cannot be used with --id or --index")
-    return scenarios[:limit]
+        if start_index:
+            raise RuntimeError("--start-index cannot be used with --id or --index")
+        if limit is not None:
+            raise RuntimeError("--limit cannot be used with --id or --index")
+        return scenarios
+    if start_index >= len(scenarios) and scenarios:
+        raise RuntimeError(f"--start-index out of range: {start_index}")
+
+    selected = scenarios[start_index:]
+    if limit is None:
+        return selected
+    return selected[:limit]
 
 
 def _result_payload(results: list[dict[str, Any]], *, total: int) -> dict[str, Any] | list[dict[str, Any]]:
     if total == 1:
         return results[0]
     return results
+
+
+def _load_resume_results(path: Path, *, start_index: int) -> list[dict[str, Any]]:
+    if start_index <= 0 or not path.is_file():
+        return []
+
+    with path.open("r", encoding="utf-8") as file:
+        payload = json.load(file)
+    existing = payload if isinstance(payload, list) else [payload]
+
+    results: list[dict[str, Any]] = []
+    for fallback_index, result in enumerate(existing):
+        if not isinstance(result, dict):
+            continue
+        case_index = _result_case_index(result, fallback_index)
+        if case_index >= start_index:
+            continue
+        resumed = dict(result)
+        resumed["case_index"] = case_index
+        resumed["case_number"] = case_index + 1
+        results.append(resumed)
+    return results
+
+
+def _result_case_index(result: dict[str, Any], fallback_index: int) -> int:
+    try:
+        return int(result.get("case_index", fallback_index))
+    except (TypeError, ValueError):
+        return fallback_index
 
 
 def _summary_report(
@@ -684,8 +786,10 @@ def _summary_case(index: int, result: dict[str, Any]) -> dict[str, Any]:
     artifacts = result.get("artifacts") or {}
     is_correct = response.get("is_correct")
     status = "passed" if is_correct is True else "failed" if is_correct is False else "unknown"
+    case_index = result.get("case_index", index)
     return {
-        "index": index,
+        "index": case_index,
+        "case_number": result.get("case_number", case_index + 1),
         "scenario_id": result.get("scenario_id"),
         "run_id": result.get("run_id"),
         "status": status,
@@ -736,10 +840,14 @@ def _safe_path_segment(value: str) -> str:
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
 
-    with path.open("w", encoding="utf-8") as file:
+    with tmp_path.open("w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=False, indent=2)
         file.write("\n")
+        file.flush()
+        os.fsync(file.fileno())
+    tmp_path.replace(path)
 
 
 class _TeeStream:
@@ -794,7 +902,10 @@ def _write_run_env_snapshot(artifact_dir: Path, *, run_id: str, args: argparse.N
         f"SCENARIO={_env_value(args.scenario)}",
         f"RESULT={_env_value(args.result)}",
         f"DIALOGUE_TURNS={args.dialogue_turns}",
+        f"START_INDEX={args.start_index}",
         f"LIMIT={_env_value(args.limit or '')}",
+        f"CASE_RETRIES={args.case_retries}",
+        f"CASE_RETRY_DELAY={args.case_retry_delay}",
         f"AUDIO_SPEED={args.audio_speed}",
         f"FRAME_MS={args.frame_ms}",
         "",
@@ -963,6 +1074,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("result", help="Output evaluation result JSON path.")
     parser.add_argument("--id", dest="scenario_id", help="Select a scenario by id when scenario is a dataset.")
     parser.add_argument("--index", dest="scenario_index", type=int, help="Select a scenario by zero-based index.")
+    parser.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="Start a batch at this zero-based scenario index, e.g. 6 starts at case 7.",
+    )
     parser.add_argument("--limit", type=int, help="Run only the first N scenarios when scenario is a dataset.")
     parser.add_argument("--audio-dir", help="Directory containing original speech wav files.")
     parser.add_argument("--dialogue-turns", type=int, default=5, help="Scholar turns before evaluation.")
@@ -989,6 +1106,18 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=30.0,
         help="Maximum seconds to wait for one utterance.",
+    )
+    parser.add_argument(
+        "--case-retries",
+        type=int,
+        default=3,
+        help="Maximum attempts per scenario before failing the evaluation.",
+    )
+    parser.add_argument(
+        "--case-retry-delay",
+        type=float,
+        default=30.0,
+        help="Seconds to wait before retrying a failed scenario.",
     )
     parser.add_argument(
         "--no-tts",
