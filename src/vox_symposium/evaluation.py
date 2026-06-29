@@ -110,6 +110,8 @@ async def _run_evaluations(
     results = _load_resume_results(result_path, start_index=start_index)
     if total > 1 and args.answer_audio:
         raise RuntimeError("--answer-audio can only be used when one scenario is selected with --id or --index")
+    if args.case_delay < 0:
+        raise RuntimeError("--case-delay must be at least 0")
     if results:
         print(f"Loaded {len(results)} completed result(s) before --start-index {start_index}: {result_path}")
 
@@ -172,6 +174,9 @@ async def _run_evaluations(
                 f"choice={response['choice'] or 'unknown'}, "
                 f"is_correct={response['is_correct']})"
             )
+        if args.case_delay > 0 and selected_index < len(scenarios) - 1:
+            print(f"Waiting {args.case_delay:.1f}s before next scenario")
+            await asyncio.sleep(args.case_delay)
 
 
 async def _run_scenario_with_retries(
@@ -904,6 +909,7 @@ def _write_run_env_snapshot(artifact_dir: Path, *, run_id: str, args: argparse.N
         f"DIALOGUE_TURNS={args.dialogue_turns}",
         f"START_INDEX={args.start_index}",
         f"LIMIT={_env_value(args.limit or '')}",
+        f"CASE_DELAY={args.case_delay}",
         f"CASE_RETRIES={args.case_retries}",
         f"CASE_RETRY_DELAY={args.case_retry_delay}",
         f"AUDIO_SPEED={args.audio_speed}",
@@ -1112,6 +1118,12 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Maximum attempts per scenario before failing the evaluation.",
+    )
+    parser.add_argument(
+        "--case-delay",
+        type=float,
+        default=0.0,
+        help="Seconds to wait after a successful scenario before starting the next one.",
     )
     parser.add_argument(
         "--case-retry-delay",

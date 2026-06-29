@@ -55,6 +55,7 @@ vox-symposium-evaluate SCENARIO RESULT [options]
 | `--idle-timeout IDLE_TIMEOUT` | `1.5` | 收到模型音訊後，連續多少秒沒有新音訊就視為該 utterance 結束。 |
 | `--max-utterance-seconds MAX_UTTERANCE_SECONDS` | `30.0` | 等待單次 utterance 的最長秒數。若模型常超時，可調大，例如 `--max-utterance-seconds 300`。 |
 | `--case-retries CASE_RETRIES` | `3` | 每筆 scenario 最多嘗試次數。單筆 case timeout 或其他 exception 時，會刪除該 case artifact 子資料夾後重試；達到次數仍失敗才讓整次 evaluation 失敗退出。 |
+| `--case-delay CASE_DELAY` | `0.0` | 成功完成一筆 scenario 並寫入 result / summary 後，下一筆 scenario 開始前等待秒數。最後一筆不會等待。 |
 | `--case-retry-delay CASE_RETRY_DELAY` | `30.0` | 單筆 case 失敗後，下一次重試前等待秒數。 |
 | `--artifact-dir ARTIFACT_DIR` | `RESULT` 同資料夾的 `<run-id>-artifacts` | artifacts 輸出資料夾，包含 console log、summary、run env snapshot、每筆 dialogue log 和 WAV。 |
 | `--run-id RUN_ID` | `result` 檔名 stem | 本次 evaluation 的穩定 run id。batch 模式會自動加上 case 編號和 scenario row id，例如 `two_Gemini-Gemini-0007-00000006`。 |
@@ -71,6 +72,8 @@ vox-symposium-evaluate SCENARIO RESULT [options]
 | `<artifact-dir>/<row-id>/scholar-answer.wav` | scholar 對 evaluation question 的回答音訊。 |
 
 如果單筆 case 因 timeout、connection error 或其他 exception 失敗，runner 會刪除該 case 的 `<artifact-dir>/<row-id>/` 子資料夾，等待 `--case-retry-delay` 秒後重試。預設最多嘗試 3 次；第 3 次仍失敗時，整次 evaluation 會失敗退出。
+
+`--case-delay` 與 `--case-retry-delay` 是不同用途：前者是成功 case 到下一個 case 中間等待；後者是同一 case 失敗後 retry 前等待。
 
 ## 常用範例
 
@@ -164,6 +167,18 @@ python3 -m vox_symposium.evaluation \
   --start-index 6 \
   --case-retries 3 \
   --case-retry-delay 30
+```
+
+每個成功 case 之間等待 10 秒：
+
+```bash
+python3 -m vox_symposium.evaluation \
+  data/scenarios/two_test_dataset.json \
+  data/results/two_Gemini-Gemini.json \
+  --run-id two_Gemini-Gemini \
+  --dialogue-turns 10 \
+  --start-index 6 \
+  --case-delay 10
 ```
 
 ## Provider 設定提醒
