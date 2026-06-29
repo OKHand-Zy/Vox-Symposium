@@ -208,6 +208,15 @@ async def _run_scenario_with_retries(
             _remove_failed_case_artifacts(artifact_root, scenario.data)
             if attempt >= attempts:
                 print(f"Scenario {scenario.id} failed after {attempts} attempt(s)")
+                if args.overnight:
+                    print("Overnight mode is enabled; recording failed case and continuing")
+                    return _build_failed_case_result(
+                        scenario.data,
+                        run_id=run_id,
+                        exc=exc,
+                        attempts=attempts,
+                        env_snapshot_path=env_snapshot_path,
+                    )
                 raise
             print(
                 f"Scenario {scenario.id} failed on attempt {attempt}/{attempts}: "
@@ -217,6 +226,31 @@ async def _run_scenario_with_retries(
             await asyncio.sleep(args.case_retry_delay)
 
     raise RuntimeError(f"Scenario {scenario.id} failed after {attempts} attempt(s)")
+
+
+def _build_failed_case_result(
+    scenario: dict[str, Any],
+    *,
+    run_id: str,
+    exc: Exception,
+    attempts: int,
+    env_snapshot_path: Path,
+) -> dict[str, Any]:
+    result = build_evaluation_result(
+        scenario,
+        response_text="",
+        response_audio=None,
+        dialogue_log=None,
+        run_id=run_id,
+    )
+    result["status"] = "failed"
+    result["error"] = {
+        "message": _format_error(exc),
+        "attempts": attempts,
+    }
+    result["response"]["is_correct"] = False
+    result["artifacts"]["env_snapshot"] = str(env_snapshot_path)
+    return result
 
 
 async def _run_scenario_evaluation(
@@ -790,7 +824,7 @@ def _summary_case(index: int, result: dict[str, Any]) -> dict[str, Any]:
     evaluation = result.get("evaluation") or {}
     artifacts = result.get("artifacts") or {}
     is_correct = response.get("is_correct")
-    status = "passed" if is_correct is True else "failed" if is_correct is False else "unknown"
+    status = result.get("status") or ("passed" if is_correct is True else "failed" if is_correct is False else "unknown")
     case_index = result.get("case_index", index)
     return {
         "index": case_index,
@@ -804,6 +838,7 @@ def _summary_case(index: int, result: dict[str, Any]) -> dict[str, Any]:
         "response_text": response.get("text"),
         "response_audio": response.get("audio"),
         "dialogue_log": artifacts.get("dialogue_log"),
+        "error": result.get("error"),
     }
 
 
@@ -912,6 +947,7 @@ def _write_run_env_snapshot(artifact_dir: Path, *, run_id: str, args: argparse.N
         f"CASE_DELAY={args.case_delay}",
         f"CASE_RETRIES={args.case_retries}",
         f"CASE_RETRY_DELAY={args.case_retry_delay}",
+        f"OVERNIGHT={args.overnight}",
         f"AUDIO_SPEED={args.audio_speed}",
         f"FRAME_MS={args.frame_ms}",
         "",
@@ -1130,6 +1166,11 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=30.0,
         help="Seconds to wait before retrying a failed scenario.",
+    )
+    parser.add_argument(
+        "--overnight",
+        action="store_true",
+        help="Continue to the next scenario after retry attempts are exhausted, recording the case as failed.",
     )
     parser.add_argument(
         "--no-tts",
