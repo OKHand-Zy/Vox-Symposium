@@ -176,10 +176,10 @@ python3 -m vox_symposium.evaluation \
 
 ```text
 Playing opening from scholar into citizen: data/test/instruct_00000000_9.wav
-Captured citizen turn 1
-Captured scholar turns 1
-Captured citizen turn 2
-Captured scholar turns 2
+Captured citizen turn 1: ...
+Captured scholar turns 1: ...
+Captured citizen turn 2: ...
+Captured scholar turns 2: ...
 Playing evaluation question into scholar: data/question_audio/two_test/question_00000000.wav
 Captured scholar answer evaluation question: data/results/00000000-smoke-artifacts/00000000/scholar-answer.wav
 Saved evaluation result: data/results/00000000-smoke.json (...)

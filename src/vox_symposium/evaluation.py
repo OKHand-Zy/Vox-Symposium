@@ -462,7 +462,7 @@ async def _run_dialogue_turns(
                 **audio_event_fields(recording),
             }
         )
-        print(_format_dialogue_capture(current_agent, turn_index))
+        print(_format_dialogue_capture(current_agent, turn_index, text))
 
         if current_agent == "scholar" and scholar_turns >= target_turns:
             break
@@ -475,9 +475,12 @@ async def _run_dialogue_turns(
     return scholar_turns
 
 
-def _format_dialogue_capture(agent: str, turn_index: int) -> str:
+def _format_dialogue_capture(agent: str, turn_index: int, text: str = "") -> str:
     turn_word = "turns" if agent == "scholar" else "turn"
-    return f"Captured {agent} {turn_word} {turn_index}"
+    message = f"Captured {agent} {turn_word} {turn_index}"
+    if text:
+        return f"{message}: {text}"
+    return message
 
 
 async def _collect_utterance(
