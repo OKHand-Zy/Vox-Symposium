@@ -12,6 +12,17 @@ from typing import Any
 
 AgentKey = str
 
+DIALOGUE_BEHAVIOR = (
+    "Stay in character and respond with the speaking style, perspective, emotions, and reasoning that fit "
+    "your assigned role. Use the conversation history as context, and continue the same conversation while "
+    "preserving details from earlier turns.\n\n"
+    "When the other speaker shows interest, agreement, or reduced hesitation, continue by exploring "
+    "practical next steps, preferences, concerns, constraints, trade-offs, examples, or conditions for "
+    "trying the recommendation.\n\n"
+    "Avoid closing the conversation or shifting into farewell-style responses. Each response should leave a "
+    "natural opening for the other speaker to continue, grounded in the existing conversation."
+)
+
 
 @dataclass(frozen=True)
 class LoadedScenario:
@@ -170,6 +181,9 @@ def build_agent_instructions(scenario: dict[str, Any], agent: AgentKey) -> str:
         f"- Subtype: {_empty_to_unknown(scene.get('subtype'))}",
         f"- Topic: {_empty_to_unknown(scene.get('topic'))}",
         f"- Goal: {_empty_to_unknown(scene.get('goal'))}",
+        "",
+        "Dialogue behavior:",
+        DIALOGUE_BEHAVIOR,
         "",
         "Prior conversation history:",
     ]

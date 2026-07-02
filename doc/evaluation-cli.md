@@ -67,7 +67,7 @@ vox-symposium-evaluate SCENARIO RESULT [options]
 | --- | --- |
 | `RESULT` | 主要 evaluation result。batch 模式每完成一筆就會更新。 |
 | `<artifact-dir>/summary.json` | batch 摘要。每完成一筆 case 就會立刻更新；使用 `--start-index` 從中段繼續時，`index` 仍保留原 dataset 的 zero-based index。 |
-| `<artifact-dir>/console-log.txt` | 本次 CLI stdout / stderr log。 |
+| `<artifact-dir>/console-log.txt` | CLI stdout / stderr log。重複使用同一個 artifact dir 時會用 `###################################` 分隔並繼續追加，不會清除舊 log。 |
 | `<artifact-dir>/run-env.txt` | 本次 provider、model、backend、voice、run id、參數等非敏感環境快照。API key 不會寫入。 |
 | `<artifact-dir>/<row-id>/dialogue-log.json` | 單筆 scenario 的 opening、dialogue turns、evaluation question / answer event log。 |
 | `<artifact-dir>/<row-id>/scholar-answer.wav` | scholar 對 evaluation question 的回答音訊。 |

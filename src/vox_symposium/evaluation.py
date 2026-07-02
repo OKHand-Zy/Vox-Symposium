@@ -917,7 +917,16 @@ class _TeeStream:
 @contextmanager
 def _tee_console(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
+    should_separate = path.is_file() and path.stat().st_size > 0
+    separator_prefix = ""
+    if should_separate:
+        with path.open("rb") as existing:
+            existing.seek(-1, os.SEEK_END)
+            if existing.read(1) != b"\n":
+                separator_prefix = "\n"
+    with path.open("a", encoding="utf-8") as file:
+        if should_separate:
+            file.write(f"{separator_prefix}###################################\n")
         stdout = _TeeStream(sys.stdout, file)
         stderr = _TeeStream(sys.stderr, file)
         with redirect_stdout(stdout), redirect_stderr(stderr):
