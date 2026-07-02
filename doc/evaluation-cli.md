@@ -209,3 +209,4 @@ GEMINI_API_KEY=your-gemini-api-key
 ```
 
 若沒有設定，預設是 `citizen=openai`、`scholar=gemini`，不會是兩個 Gemini 對講。
+OpenAI Realtime 可用 `OPENAI_REALTIME_REASONING_EFFORT=low` 設定 Realtime 2 的 reasoning effort。

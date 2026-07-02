@@ -25,6 +25,7 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
         backend: str = "openai",
         endpoint: str | None = None,
         api_version: str | None = None,
+        reasoning_effort: str | None = None,
         manual_activity: bool = False,
     ) -> None:
         super().__init__()
@@ -35,6 +36,7 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
         self.backend = backend
         self.endpoint = endpoint
         self.api_version = api_version
+        self.reasoning_effort = reasoning_effort
         self.manual_activity = manual_activity
         self._ws: ClientConnection | None = None
         self._reader_task: asyncio.Task[None] | None = None
@@ -73,6 +75,10 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
                 }
             },
         }
+        if self.reasoning_effort:
+            session["reasoning"] = {
+                "effort": self.reasoning_effort,
+            }
         # Azure selects the deployment in the URL and doesn't accept a deployment
         # alias as session.model. The official endpoint keeps the existing behavior.
         if self.backend == "openai":

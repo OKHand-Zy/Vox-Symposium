@@ -42,6 +42,7 @@ def build_model_from_settings(
             api_version=settings.openai_api_version,
             model=settings.openai_model,
             voice=settings.openai_voice,
+            reasoning_effort=settings.openai_reasoning_effort,
             instructions=agent.instructions,
             manual_activity=evaluation_mode,
         )
@@ -140,6 +141,7 @@ def build_model_from_env(
             api_version=auth.api_version,
             model=auth.model,
             voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
+            reasoning_effort=os.getenv("OPENAI_REALTIME_REASONING_EFFORT") or None,
             instructions=instructions,
             manual_activity=evaluation_mode,
         )

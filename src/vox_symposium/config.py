@@ -52,6 +52,7 @@ class Settings:
     openai_api_version: str | None
     openai_model: str
     openai_voice: str
+    openai_reasoning_effort: str | None
     gemini_api_key: str | None
     gemini_backend: str
     gemini_vertex_project: str | None
@@ -171,6 +172,7 @@ def load_settings() -> Settings:
             else os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
         ),
         openai_voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
+        openai_reasoning_effort=os.getenv("OPENAI_REALTIME_REASONING_EFFORT") or None,
         gemini_api_key=gemini_auth.api_key if gemini_auth else None,
         gemini_backend=gemini_auth.backend if gemini_auth else "ai_studio",
         gemini_vertex_project=gemini_auth.project if gemini_auth else None,

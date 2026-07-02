@@ -388,6 +388,7 @@ AZURE_OPENAI_API_KEY=your-azure-openai-api-key
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_OPENAI_DEPLOYMENT_NAME=your-gpt-realtime-deployment
 OPENAI_REALTIME_VOICE=marin
+OPENAI_REALTIME_REASONING_EFFORT=low
 ```
 
 預設使用 Azure GA endpoint（`/openai/v1/realtime`）。只有 deployment 使用 preview
@@ -550,6 +551,9 @@ LIVEKIT_API_SECRET=your-livekit-api-secret
 AGENT_CITIZEN_PROVIDER=openai
 AGENT_SCHOLAR_PROVIDER=openai
 OPENAI_API_KEY=your-openai-api-key
+OPENAI_REALTIME_MODEL=gpt-realtime-2
+OPENAI_REALTIME_VOICE=marin
+OPENAI_REALTIME_REASONING_EFFORT=low
 ```
 
 改用 Azure OpenAI 時，將上段的 `OPENAI_API_KEY` 換成：
