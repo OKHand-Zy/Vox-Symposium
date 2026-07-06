@@ -1011,6 +1011,8 @@ def _effective_model_snapshot(provider: str) -> tuple[str, str | None, dict[str,
         return os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2"), "openai", {
             "VOICE": os.getenv("OPENAI_REALTIME_VOICE", "marin"),
             "REASONING_EFFORT": os.getenv("OPENAI_REALTIME_REASONING_EFFORT", ""),
+            "PING_INTERVAL": os.getenv("OPENAI_REALTIME_PING_INTERVAL", "20.0"),
+            "PING_TIMEOUT": os.getenv("OPENAI_REALTIME_PING_TIMEOUT", "20.0"),
         }
     if provider == "gemini":
         backend = normalized_env("GEMINI_BACKEND", "ai_studio")
@@ -1038,6 +1040,8 @@ def _provider_env_snapshot() -> list[str]:
         "OPENAI_REALTIME_MODEL=" + _env_value(os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")),
         "OPENAI_REALTIME_VOICE=" + _env_value(os.getenv("OPENAI_REALTIME_VOICE", "marin")),
         "OPENAI_REALTIME_REASONING_EFFORT=" + _env_value(os.getenv("OPENAI_REALTIME_REASONING_EFFORT", "")),
+        "OPENAI_REALTIME_PING_INTERVAL=" + _env_value(os.getenv("OPENAI_REALTIME_PING_INTERVAL", "20.0")),
+        "OPENAI_REALTIME_PING_TIMEOUT=" + _env_value(os.getenv("OPENAI_REALTIME_PING_TIMEOUT", "20.0")),
         "AZURE_OPENAI_DEPLOYMENT_NAME=" + _env_value(os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "")),
         "AZURE_OPENAI_ENDPOINT=" + _env_value(os.getenv("AZURE_OPENAI_ENDPOINT", "")),
         "AZURE_OPENAI_API_VERSION=" + _env_value(os.getenv("AZURE_OPENAI_API_VERSION", "")),

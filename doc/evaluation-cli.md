@@ -210,3 +210,5 @@ GEMINI_API_KEY=your-gemini-api-key
 
 若沒有設定，預設是 `citizen=openai`、`scholar=gemini`，不會是兩個 Gemini 對講。
 OpenAI Realtime 可用 `OPENAI_REALTIME_REASONING_EFFORT=low` 設定 Realtime 2 的 reasoning effort。
+如果遇到 `ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout`，
+可先設定 `OPENAI_REALTIME_PING_INTERVAL=20` 與 `OPENAI_REALTIME_PING_TIMEOUT=120`。

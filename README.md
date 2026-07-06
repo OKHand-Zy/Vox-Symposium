@@ -302,7 +302,7 @@ vox-symposium-scenario save-result \
 - `Missing required environment variable: OPENAI_API_KEY`：evaluation runner 沒讀到 `.env` 裡的 provider/backend 設定。若使用 Azure，確認已設定 `OPENAI_BACKEND=azure`；若不使用 OpenAI，確認角色 provider 已改為 `gemini`。確認 `.env` 在專案根目錄，並重新執行。
 - `Both GOOGLE_API_KEY and GEMINI_API_KEY are set`：Google SDK 提示會使用 `GOOGLE_API_KEY`。這不是錯誤；若不想使用它，請 unset `GOOGLE_API_KEY`。
 - `Question audio does not exist`：確認 `evaluation.question_audio` 指向的檔案存在。若 JSON 寫 `"question_00000000.mp3"`，檔案可放在 `data/question/question_00000000.mp3`。
-- `ConnectionClosedError` 或 keepalive timeout：先用 `--dialogue-turns 2` 做 smoke test；完整評測可顯式加 `--audio-speed 8` 或 `--audio-speed 16`，並確保角色回覆不要太長。
+- `ConnectionClosedError` 或 keepalive ping timeout：OpenAI Realtime 先在 `.env` 設 `OPENAI_REALTIME_PING_TIMEOUT=120`；若是大量 batch，再用 `--dialogue-turns 2` 做 smoke test，完整評測可顯式加 `--audio-speed 8` 或 `--audio-speed 16`，並確保角色回覆不要太長。
 - `choice` 是 `null`：provider 沒回傳 transcript。先聽 `scholar-answer.wav` 或用 STT 轉寫，再用 `save-result` 保存文字答案。
 
 ## 安裝
@@ -389,6 +389,8 @@ AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 AZURE_OPENAI_DEPLOYMENT_NAME=your-gpt-realtime-deployment
 OPENAI_REALTIME_VOICE=marin
 OPENAI_REALTIME_REASONING_EFFORT=low
+OPENAI_REALTIME_PING_INTERVAL=20
+OPENAI_REALTIME_PING_TIMEOUT=120
 ```
 
 預設使用 Azure GA endpoint（`/openai/v1/realtime`）。只有 deployment 使用 preview
@@ -554,6 +556,8 @@ OPENAI_API_KEY=your-openai-api-key
 OPENAI_REALTIME_MODEL=gpt-realtime-2
 OPENAI_REALTIME_VOICE=marin
 OPENAI_REALTIME_REASONING_EFFORT=low
+OPENAI_REALTIME_PING_INTERVAL=20
+OPENAI_REALTIME_PING_TIMEOUT=120
 ```
 
 改用 Azure OpenAI 時，將上段的 `OPENAI_API_KEY` 換成：

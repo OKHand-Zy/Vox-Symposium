@@ -43,6 +43,8 @@ def build_model_from_settings(
             model=settings.openai_model,
             voice=settings.openai_voice,
             reasoning_effort=settings.openai_reasoning_effort,
+            ping_interval=settings.openai_ping_interval,
+            ping_timeout=settings.openai_ping_timeout,
             instructions=agent.instructions,
             manual_activity=evaluation_mode,
         )
@@ -142,6 +144,8 @@ def build_model_from_env(
             model=auth.model,
             voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
             reasoning_effort=os.getenv("OPENAI_REALTIME_REASONING_EFFORT") or None,
+            ping_interval=float_env("OPENAI_REALTIME_PING_INTERVAL", 20.0),
+            ping_timeout=float_env("OPENAI_REALTIME_PING_TIMEOUT", 20.0),
             instructions=instructions,
             manual_activity=evaluation_mode,
         )

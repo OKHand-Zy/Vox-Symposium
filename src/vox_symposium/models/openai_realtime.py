@@ -11,6 +11,16 @@ from vox_symposium.audio import PcmAudio, normalize_audio
 from vox_symposium.models.base import QueueBackedRealtimeAudioModel
 
 
+_AUDIO_TRANSCRIPT_DELTA_EVENTS = {
+    "response.audio_transcript.delta",
+    "response.output_audio_transcript.delta",
+}
+_AUDIO_TRANSCRIPT_DONE_EVENTS = {
+    "response.audio_transcript.done",
+    "response.output_audio_transcript.done",
+}
+
+
 class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
     input_sample_rate = 24_000
     output_sample_rate = 24_000
@@ -26,6 +36,8 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
         endpoint: str | None = None,
         api_version: str | None = None,
         reasoning_effort: str | None = None,
+        ping_interval: float = 20.0,
+        ping_timeout: float = 20.0,
         manual_activity: bool = False,
     ) -> None:
         super().__init__()
@@ -37,6 +49,8 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
         self.endpoint = endpoint
         self.api_version = api_version
         self.reasoning_effort = reasoning_effort
+        self.ping_interval = ping_interval
+        self.ping_timeout = ping_timeout
         self.manual_activity = manual_activity
         self._ws: ClientConnection | None = None
         self._reader_task: asyncio.Task[None] | None = None
@@ -47,6 +61,8 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
             url,
             additional_headers=headers,
             max_size=None,
+            ping_interval=self.ping_interval,
+            ping_timeout=self.ping_timeout,
         )
         session = {
             "type": "realtime",
@@ -158,6 +174,7 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
 
     async def _read_loop(self) -> None:
         assert self._ws is not None
+        audio_transcript_parts: dict[str, list[str]] = {}
         try:
             async for raw in self._ws:
                 event = json.loads(raw)
@@ -172,25 +189,24 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
                                 channels=1,
                             )
                         )
-                elif event_type in {
-                    "response.audio_transcript.delta",
-                    "response.output_audio_transcript.delta",
-                    "response.text.delta",
-                    "response.output_text.delta",
-                }:
+                elif event_type in _AUDIO_TRANSCRIPT_DELTA_EVENTS:
                     delta = event.get("delta")
                     if delta:
-                        await self._text_out.put(delta)
-                elif event_type in {
-                    "response.audio_transcript.done",
-                    "response.output_audio_transcript.done",
-                    "response.text.done",
-                    "response.output_text.done",
-                }:
-                    text = event.get("transcript") or event.get("text")
+                        audio_transcript_parts.setdefault(_event_text_key(event), []).append(delta)
+                elif event_type in _AUDIO_TRANSCRIPT_DONE_EVENTS:
+                    key = _event_text_key(event)
+                    parts = audio_transcript_parts.pop(key, [])
+                    text = event.get("transcript") or "".join(parts)
                     if text:
                         await self._text_out.put(text)
                 elif event_type == "error":
                     raise RuntimeError(f"OpenAI realtime error: {event}")
         finally:
             self.close_output_streams()
+
+
+def _event_text_key(event: dict) -> str:
+    return "|".join(
+        str(event.get(key, ""))
+        for key in ("response_id", "item_id", "output_index", "content_index")
+    )

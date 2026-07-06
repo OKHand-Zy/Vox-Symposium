@@ -53,6 +53,8 @@ class Settings:
     openai_model: str
     openai_voice: str
     openai_reasoning_effort: str | None
+    openai_ping_interval: float
+    openai_ping_timeout: float
     gemini_api_key: str | None
     gemini_backend: str
     gemini_vertex_project: str | None
@@ -173,6 +175,8 @@ def load_settings() -> Settings:
         ),
         openai_voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
         openai_reasoning_effort=os.getenv("OPENAI_REALTIME_REASONING_EFFORT") or None,
+        openai_ping_interval=float_env("OPENAI_REALTIME_PING_INTERVAL", 20.0),
+        openai_ping_timeout=float_env("OPENAI_REALTIME_PING_TIMEOUT", 20.0),
         gemini_api_key=gemini_auth.api_key if gemini_auth else None,
         gemini_backend=gemini_auth.backend if gemini_auth else "ai_studio",
         gemini_vertex_project=gemini_auth.project if gemini_auth else None,
