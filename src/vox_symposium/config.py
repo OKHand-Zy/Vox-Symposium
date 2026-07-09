@@ -18,6 +18,7 @@ from vox_symposium.env import (
     float_env,
     int_env,
     normalized_env,
+    optional_float_env,
     optional_int_env,
     required_env,
 )
@@ -66,6 +67,8 @@ class Settings:
     minicpm_length_penalty: float
     minicpm_input_chunk_ms: int
     minicpm_queue_timeout: float
+    minicpm_ping_interval: float | None
+    minicpm_ping_timeout: float | None
     freeze_omni_realtime_url: str | None
     freeze_omni_ssl_verify: bool
     freeze_omni_input_chunk_ms: int
@@ -188,6 +191,8 @@ def load_settings() -> Settings:
         minicpm_length_penalty=float_env("MINICPM_LENGTH_PENALTY", 1.1),
         minicpm_input_chunk_ms=int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
         minicpm_queue_timeout=float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
+        minicpm_ping_interval=optional_float_env("MINICPM_PING_INTERVAL", 30.0),
+        minicpm_ping_timeout=optional_float_env("MINICPM_PING_TIMEOUT", 120.0),
         freeze_omni_realtime_url=(
             _socketio_url(freeze_omni_url) if freeze_omni_url else None
         ),

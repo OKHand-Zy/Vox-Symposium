@@ -307,6 +307,8 @@ async def _run_scenario_evaluation(
             target_turns=args.dialogue_turns,
             idle_timeout=args.idle_timeout,
             max_utterance_seconds=args.max_utterance_seconds,
+            text_idle_timeout=args.text_idle_timeout,
+            text_max_wait=args.text_max_wait,
             frame_ms=args.frame_ms,
             audio_speed=args.audio_speed,
         )
@@ -339,7 +341,11 @@ async def _run_scenario_evaluation(
         )
         answer_audio = Path(args.answer_audio) if args.answer_audio else artifact_dir / "scholar-answer.wav"
         answer_recording = _write_wav(answer_audio, answer.audio)
-        answer_text = await _collect_text_after_audio(text_queues["scholar"])
+        answer_text = await _collect_text_after_audio(
+            text_queues["scholar"],
+            idle_timeout=args.text_idle_timeout,
+            max_wait=args.text_max_wait,
+        )
         dialogue_log["events"].append(
             {
                 "type": "evaluation_answer",
@@ -429,6 +435,8 @@ async def _run_dialogue_turns(
     target_turns: int,
     idle_timeout: float,
     max_utterance_seconds: float,
+    text_idle_timeout: float,
+    text_max_wait: float,
     frame_ms: int,
     audio_speed: float,
 ) -> int:
@@ -451,7 +459,11 @@ async def _run_dialogue_turns(
             scholar_turns += 1
         utterance_path = artifact_dir / f"dialogue-{event_index:02d}-{current_agent}.wav"
         recording = _write_wav(utterance_path, utterance.audio)
-        text = await _collect_text_after_audio(text_queues[current_agent])
+        text = await _collect_text_after_audio(
+            text_queues[current_agent],
+            idle_timeout=text_idle_timeout,
+            max_wait=text_max_wait,
+        )
         dialogue_log["events"].append(
             {
                 "type": "dialogue_turn",
@@ -556,13 +568,40 @@ async def _read_text(model: RealtimeAudioModel, queue: asyncio.Queue[str | None]
         await queue.put(None)
 
 
-async def _collect_text_after_audio(queue: asyncio.Queue[str | None]) -> str:
-    await asyncio.sleep(0.7)
+async def _collect_text_after_audio(
+    queue: asyncio.Queue[str | None],
+    *,
+    idle_timeout: float,
+    max_wait: float,
+) -> str:
+    if idle_timeout < 0:
+        raise RuntimeError("--text-idle-timeout must be at least 0")
+    if max_wait < 0:
+        raise RuntimeError("--text-max-wait must be at least 0")
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max_wait
     parts: list[str] = []
     while True:
+        while True:
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if item is None:
+                return "".join(parts).strip()
+            if item:
+                parts.append(item)
+
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
+
         try:
-            item = queue.get_nowait()
-        except asyncio.QueueEmpty:
+            item = await asyncio.wait_for(queue.get(), timeout=min(idle_timeout, remaining))
+        except TimeoutError:
+            break
+        if item is None:
             break
         if item:
             parts.append(item)
@@ -1018,7 +1057,10 @@ def _effective_model_snapshot(provider: str) -> tuple[str, str | None, dict[str,
         backend = normalized_env("GEMINI_BACKEND", "ai_studio")
         return gemini_live_model(backend), backend, {}
     if provider == "minicpm":
-        return os.getenv("MINICPM_REALTIME_MODEL", "minicpm-realtime-gateway"), None, {}
+        return os.getenv("MINICPM_REALTIME_MODEL", "minicpm-realtime-gateway"), None, {
+            "PING_INTERVAL": os.getenv("MINICPM_PING_INTERVAL", "30.0"),
+            "PING_TIMEOUT": os.getenv("MINICPM_PING_TIMEOUT", "120.0"),
+        }
     if provider == "freeze_omni":
         return os.getenv("FREEZE_OMNI_MODEL", "freeze-omni"), "socketio", {
             "REALTIME_URL": _redacted_url(os.getenv("FREEZE_OMNI_REALTIME_URL", "")),
@@ -1056,6 +1098,8 @@ def _provider_env_snapshot() -> list[str]:
         "MINICPM_LENGTH_PENALTY=" + _env_value(os.getenv("MINICPM_LENGTH_PENALTY", "1.1")),
         "MINICPM_INPUT_CHUNK_MS=" + _env_value(os.getenv("MINICPM_INPUT_CHUNK_MS", "1000")),
         "MINICPM_QUEUE_TIMEOUT=" + _env_value(os.getenv("MINICPM_QUEUE_TIMEOUT", "300.0")),
+        "MINICPM_PING_INTERVAL=" + _env_value(os.getenv("MINICPM_PING_INTERVAL", "30.0")),
+        "MINICPM_PING_TIMEOUT=" + _env_value(os.getenv("MINICPM_PING_TIMEOUT", "120.0")),
         "",
         "FREEZE_OMNI_MODEL=" + _env_value(os.getenv("FREEZE_OMNI_MODEL", "freeze-omni")),
         "FREEZE_OMNI_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("FREEZE_OMNI_REALTIME_URL", ""))),
@@ -1166,6 +1210,18 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=30.0,
         help="Maximum seconds to wait for one utterance.",
+    )
+    parser.add_argument(
+        "--text-idle-timeout",
+        type=float,
+        default=0.7,
+        help="Seconds without new text deltas before captured text is considered complete.",
+    )
+    parser.add_argument(
+        "--text-max-wait",
+        type=float,
+        default=5.0,
+        help="Maximum seconds to wait for delayed text deltas after an utterance ends.",
     )
     parser.add_argument(
         "--case-retries",

@@ -54,6 +54,8 @@ vox-symposium-evaluate SCENARIO RESULT [options]
 | --- | --- | --- |
 | `--idle-timeout IDLE_TIMEOUT` | `1.5` | 收到模型音訊後，連續多少秒沒有新音訊就視為該 utterance 結束。 |
 | `--max-utterance-seconds MAX_UTTERANCE_SECONDS` | `30.0` | 等待單次 utterance 的最長秒數。若模型常超時，可調大，例如 `--max-utterance-seconds 300`。 |
+| `--text-idle-timeout TEXT_IDLE_TIMEOUT` | `0.7` | 收到模型音訊後，文字 delta 連續多少秒沒有新內容就視為該文字輸出結束。 |
+| `--text-max-wait TEXT_MAX_WAIT` | `5.0` | 收到模型音訊後，最多補等多少秒以收集延遲到達的文字 delta。MiniCPM text/audio delta 不同步時可調大。 |
 | `--case-retries CASE_RETRIES` | `3` | 每筆 scenario 最多嘗試次數。單筆 case timeout 或其他 exception 時，會刪除該 case artifact 子資料夾後重試；達到次數仍失敗才讓整次 evaluation 失敗退出。 |
 | `--case-delay CASE_DELAY` | `0.0` | 成功完成一筆 scenario 並寫入 result / summary 後，下一筆 scenario 開始前等待秒數。最後一筆不會等待。 |
 | `--case-retry-delay CASE_RETRY_DELAY` | `30.0` | 單筆 case 失敗後，下一次重試前等待秒數。 |

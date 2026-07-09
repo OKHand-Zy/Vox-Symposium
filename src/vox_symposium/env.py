@@ -58,6 +58,19 @@ def float_env(name: str, default: float) -> float:
         raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
 
 
+def optional_float_env(name: str, default: float | None = None) -> float | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"", "none", "null", "off", "disabled"}:
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number or 'none', got {raw!r}") from exc
+
+
 def bool_env(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:

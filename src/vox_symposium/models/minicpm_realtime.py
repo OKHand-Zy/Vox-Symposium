@@ -40,6 +40,8 @@ class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
         length_penalty: float = 1.1,
         input_chunk_ms: int = 1_000,
         queue_timeout: float = 300.0,
+        ping_interval: float | None = 30.0,
+        ping_timeout: float | None = 120.0,
         evaluation_turn_taking: bool = False,
     ) -> None:
         super().__init__()
@@ -54,6 +56,10 @@ class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
             raise ValueError("MiniCPM input chunk duration must be positive")
         if queue_timeout <= 0:
             raise ValueError("MiniCPM queue timeout must be positive")
+        if ping_interval is not None and ping_interval <= 0:
+            raise ValueError("MiniCPM ping interval must be positive or None")
+        if ping_timeout is not None and ping_timeout <= 0:
+            raise ValueError("MiniCPM ping timeout must be positive or None")
 
         self.url = url
         self.instructions = instructions
@@ -61,6 +67,8 @@ class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
         self.length_penalty = length_penalty
         self.input_chunk_ms = input_chunk_ms
         self.queue_timeout = queue_timeout
+        self.ping_interval = ping_interval
+        self.ping_timeout = ping_timeout
         self.evaluation_turn_taking = evaluation_turn_taking
         self.system_prompt = instructions.rstrip()
         if evaluation_turn_taking:
@@ -84,8 +92,8 @@ class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
             self.url,
             additional_headers=headers,
             max_size=128 * 1024 * 1024,
-            ping_interval=20,
-            ping_timeout=20,
+            ping_interval=self.ping_interval,
+            ping_timeout=self.ping_timeout,
         )
         try:
             await asyncio.wait_for(

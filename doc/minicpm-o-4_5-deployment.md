@@ -313,6 +313,8 @@ MINICPM_REALTIME_URL=ws://127.0.0.1:8006/v1/realtime?mode=audio
 MINICPM_LENGTH_PENALTY=1.1
 MINICPM_INPUT_CHUNK_MS=1000
 MINICPM_QUEUE_TIMEOUT=300
+MINICPM_PING_INTERVAL=30
+MINICPM_PING_TIMEOUT=120
 ```
 
 若 Gateway 前方的 reverse proxy 驗證 Bearer token：
@@ -336,6 +338,7 @@ python -m vox_symposium.evaluation \
   --dialogue-turns 1 \
   --audio-speed 1 \
   --idle-timeout 2.5 \
+  --text-max-wait 8 \
   --max-utterance-seconds 45
 ```
 
@@ -362,10 +365,14 @@ afplay data/results/00000000-minicpm-smoke-artifacts/scholar-answer.wav
 - Client 應持續送入 16 kHz mono float32 PCM，包括靜音；不要用 client-side VAD
   刪除所有靜音區段。
 - MiniCPM 約在每次輸入 chunk 時計算 listen/speak。停止送 input 也會停止生成後續語音。
+- MiniCPM Gateway/Worker 推理期間若無法及時回 WebSocket ping，可能出現
+  `keepalive ping timeout`；先把 `MINICPM_PING_TIMEOUT` 調大，例如 `120` 或 `180`。
 - Vox Symposium evaluation 在模型說話期間會持續送入即時靜音，直到模型回到 `listen`，
   避免 WAV 說到一半被中斷。
 - 一般 LiveKit participant 本身已有連續音訊輸入，不需要 evaluation 的額外靜音泵。
 - `text` 和 `audio` delta 不保證一一對應。
+- 如果 console 或 `dialogue-log.json` 只看到句首，例如 `嗯，这`，但 WAV 播放正常，
+  通常是文字 delta 比音訊晚到；先調大 `--text-max-wait` 或 `--text-idle-timeout`。
 - Audio Full-Duplex 不使用 `response.done` 作為每一個口語回合的結束事件。
 
 ## 13. 常見錯誤

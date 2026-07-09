@@ -9,7 +9,7 @@ from vox_symposium.config import (
     load_moshi_settings,
     load_openai_auth,
 )
-from vox_symposium.env import bool_env, float_env, int_env, required_env
+from vox_symposium.env import bool_env, float_env, int_env, optional_float_env, required_env
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.providers import (
     MOSHI_PROTOCOL_PROVIDERS,
@@ -77,6 +77,8 @@ def build_model_from_settings(
             length_penalty=settings.minicpm_length_penalty,
             input_chunk_ms=settings.minicpm_input_chunk_ms,
             queue_timeout=settings.minicpm_queue_timeout,
+            ping_interval=settings.minicpm_ping_interval,
+            ping_timeout=settings.minicpm_ping_timeout,
             evaluation_turn_taking=evaluation_mode,
         )
 
@@ -175,6 +177,8 @@ def build_model_from_env(
             length_penalty=float_env("MINICPM_LENGTH_PENALTY", 1.1),
             input_chunk_ms=int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
             queue_timeout=float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
+            ping_interval=optional_float_env("MINICPM_PING_INTERVAL", 30.0),
+            ping_timeout=optional_float_env("MINICPM_PING_TIMEOUT", 120.0),
             evaluation_turn_taking=evaluation_mode,
         )
 
