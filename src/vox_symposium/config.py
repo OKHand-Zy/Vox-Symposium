@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 try:
@@ -62,6 +64,10 @@ class Settings:
     gemini_vertex_location: str | None
     gemini_credentials_file: str | None
     gemini_model: str
+    gemini_thinking_level: str
+    gemini_thinking_budget: int | None
+    gemini_enable_affective_dialog: bool
+    gemini_initial_history: tuple[dict[str, Any], ...]
     minicpm_realtime_url: str | None
     minicpm_api_key: str | None
     minicpm_length_penalty: float
@@ -158,6 +164,10 @@ def load_settings() -> Settings:
         if settings is not None
     }
 
+    gemini_backend = gemini_auth.backend if gemini_auth else "ai_studio"
+    gemini_model = gemini_live_model(gemini_backend)
+    uses_gemini_thinking_level = gemini_uses_thinking_level(gemini_model)
+
     return Settings(
         livekit_url=required_env("LIVEKIT_URL"),
         livekit_api_key=required_env("LIVEKIT_API_KEY"),
@@ -181,11 +191,15 @@ def load_settings() -> Settings:
         openai_ping_interval=float_env("OPENAI_REALTIME_PING_INTERVAL", 20.0),
         openai_ping_timeout=float_env("OPENAI_REALTIME_PING_TIMEOUT", 20.0),
         gemini_api_key=gemini_auth.api_key if gemini_auth else None,
-        gemini_backend=gemini_auth.backend if gemini_auth else "ai_studio",
+        gemini_backend=gemini_backend,
         gemini_vertex_project=gemini_auth.project if gemini_auth else None,
         gemini_vertex_location=gemini_auth.location if gemini_auth else None,
         gemini_credentials_file=gemini_auth.credentials_file if gemini_auth else None,
-        gemini_model=gemini_live_model(gemini_auth.backend if gemini_auth else "ai_studio"),
+        gemini_model=gemini_model,
+        gemini_thinking_level=(gemini_thinking_level() if uses_gemini_thinking_level else "minimal"),
+        gemini_thinking_budget=(None if uses_gemini_thinking_level else gemini_thinking_budget()),
+        gemini_enable_affective_dialog=bool_env("GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG", False),
+        gemini_initial_history=gemini_live_initial_history(),
         minicpm_realtime_url=minicpm_url,
         minicpm_api_key=os.getenv("MINICPM_API_KEY") or None,
         minicpm_length_penalty=float_env("MINICPM_LENGTH_PENALTY", 1.1),
@@ -289,6 +303,60 @@ def gemini_live_model(backend: str) -> str:
     return os.getenv("GEMINI_LIVE_MODEL", default)
 
 
+def gemini_uses_thinking_level(model: str) -> bool:
+    return model.removeprefix("models/").startswith("gemini-3.")
+
+
+def gemini_thinking_level() -> str:
+    level = normalized_env("GEMINI_LIVE_THINKING_LEVEL", "minimal")
+    allowed = {"minimal", "low", "medium", "high"}
+    if level not in allowed:
+        values = "', '".join(sorted(allowed))
+        raise RuntimeError(
+            "GEMINI_LIVE_THINKING_LEVEL must be one of "
+            f"'{values}', got {level!r}"
+        )
+    return level
+
+
+def gemini_thinking_budget() -> int | None:
+    budget = optional_int_env("GEMINI_LIVE_THINKING_BUDGET")
+    if budget is not None and budget != -1 and not 0 <= budget <= 24_576:
+        raise RuntimeError(
+            "GEMINI_LIVE_THINKING_BUDGET must be -1 or an integer from 0 to 24576"
+        )
+    return budget
+
+
+def gemini_live_initial_history() -> tuple[dict[str, Any], ...]:
+    """Load Live API initial history used with send_client_content.
+
+    Gemini 3.1 accepts client content only while seeding a session's history;
+    live audio and text must continue through send_realtime_input.
+    """
+    raw = os.getenv("GEMINI_LIVE_INITIAL_HISTORY_JSON")
+    if raw is None or not raw.strip():
+        return ()
+    try:
+        history = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("GEMINI_LIVE_INITIAL_HISTORY_JSON must be valid JSON") from exc
+    if not isinstance(history, list) or not history:
+        raise RuntimeError("GEMINI_LIVE_INITIAL_HISTORY_JSON must be a non-empty JSON array")
+    for turn in history:
+        if not isinstance(turn, dict):
+            raise RuntimeError("GEMINI_LIVE_INITIAL_HISTORY_JSON entries must be JSON objects")
+        if turn.get("role") not in {"user", "model"}:
+            raise RuntimeError(
+                "GEMINI_LIVE_INITIAL_HISTORY_JSON entries must have role 'user' or 'model'"
+            )
+        if not isinstance(turn.get("parts"), list) or not turn["parts"]:
+            raise RuntimeError(
+                "GEMINI_LIVE_INITIAL_HISTORY_JSON entries must have a non-empty parts array"
+            )
+    return tuple(history)
+
+
 def load_moshi_settings(provider: str = "moshi", *, required: bool) -> MoshiSettings | None:
     provider = normalize_provider(provider)
     prefix = provider_env_prefix(provider)
@@ -325,9 +393,30 @@ def _apply_scenario_instructions(
         dialogue_turns=int_env("SCENARIO_DIALOGUE_TURNS", 5),
     )
     return (
-        replace(agent_citizen, instructions=scenario.build_instructions("citizen")),
-        replace(agent_scholar, instructions=scenario.build_instructions("scholar")),
+        replace(
+            agent_citizen,
+            instructions=scenario.build_instructions(
+                "citizen",
+                dialogue_behavior_extra=_provider_dialogue_behavior_extra(agent_citizen.provider),
+            ),
+        ),
+        replace(
+            agent_scholar,
+            instructions=scenario.build_instructions(
+                "scholar",
+                dialogue_behavior_extra=_provider_dialogue_behavior_extra(agent_scholar.provider),
+            ),
+        ),
     )
+
+
+def _provider_dialogue_behavior_extra(provider: str) -> str | None:
+    if normalize_provider(provider) != "minicpm":
+        return None
+
+    from vox_symposium.scenario import MINICPM_DIALOGUE_BEHAVIOR
+
+    return MINICPM_DIALOGUE_BEHAVIOR
 
 
 def _uses_provider(provider: str, *agents: AgentConfig) -> bool:

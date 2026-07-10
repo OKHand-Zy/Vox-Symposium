@@ -24,6 +24,7 @@ from vox_symposium.models.factory import build_model_from_env
 from vox_symposium.recording import RecordedAudio, audio_event_fields, write_wav
 from vox_symposium.scenario import (
     LoadedScenario,
+    MINICPM_DIALOGUE_BEHAVIOR,
     build_evaluation_result,
     load_scenarios,
     write_evaluation_result,
@@ -264,8 +265,22 @@ async def _run_scenario_evaluation(
     artifact_dir = _scenario_artifact_dir(artifact_root, scenario.data)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    citizen = _build_model("citizen", scenario.build_instructions("citizen"))
-    scholar = _build_model("scholar", scenario.build_instructions("scholar"))
+    citizen_provider = _agent_provider("citizen")
+    scholar_provider = _agent_provider("scholar")
+    citizen = _build_model(
+        "citizen",
+        scenario.build_instructions(
+            "citizen",
+            dialogue_behavior_extra=_provider_dialogue_behavior_extra(citizen_provider),
+        ),
+    )
+    scholar = _build_model(
+        "scholar",
+        scenario.build_instructions(
+            "scholar",
+            dialogue_behavior_extra=_provider_dialogue_behavior_extra(scholar_provider),
+        ),
+    )
     models = {"citizen": citizen, "scholar": scholar}
 
     audio_queues: dict[str, asyncio.Queue[PcmAudio | None]] = {
@@ -620,6 +635,12 @@ def _agent_provider(agent: str) -> str:
             default=_default_provider(agent),
         )
     )
+
+
+def _provider_dialogue_behavior_extra(provider: str) -> str | None:
+    if normalize_provider(provider) == "minicpm":
+        return MINICPM_DIALOGUE_BEHAVIOR
+    return None
 
 
 def _question_audio(

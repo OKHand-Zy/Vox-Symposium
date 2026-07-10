@@ -5,6 +5,10 @@ from typing import TYPE_CHECKING
 
 from vox_symposium.config import (
     gemini_live_model,
+    gemini_live_initial_history,
+    gemini_thinking_level,
+    gemini_thinking_budget,
+    gemini_uses_thinking_level,
     load_gemini_auth,
     load_moshi_settings,
     load_openai_auth,
@@ -60,6 +64,10 @@ def build_model_from_settings(
             credentials_file=settings.gemini_credentials_file,
             model=settings.gemini_model,
             instructions=agent.instructions,
+            thinking_level=settings.gemini_thinking_level,
+            thinking_budget=settings.gemini_thinking_budget,
+            enable_affective_dialog=settings.gemini_enable_affective_dialog,
+            initial_history=settings.gemini_initial_history,
             manual_activity=evaluation_mode,
         )
 
@@ -156,14 +164,20 @@ def build_model_from_env(
         from vox_symposium.models.gemini_live import GeminiLiveModel
 
         auth = load_gemini_auth()
+        model = gemini_live_model(auth.backend)
+        uses_thinking_level = gemini_uses_thinking_level(model)
         return GeminiLiveModel(
             api_key=auth.api_key,
             backend=auth.backend,
             vertex_project=auth.project,
             vertex_location=auth.location,
             credentials_file=auth.credentials_file,
-            model=gemini_live_model(auth.backend),
+            model=model,
             instructions=instructions,
+            thinking_level=gemini_thinking_level() if uses_thinking_level else "minimal",
+            thinking_budget=None if uses_thinking_level else gemini_thinking_budget(),
+            enable_affective_dialog=bool_env("GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG", False),
+            initial_history=gemini_live_initial_history(),
             manual_activity=evaluation_mode,
         )
 

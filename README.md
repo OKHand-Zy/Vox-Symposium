@@ -80,6 +80,7 @@ pip install -e .
 AGENT_CITIZEN_PROVIDER=gemini
 AGENT_SCHOLAR_PROVIDER=gemini
 GEMINI_API_KEY=your-gemini-api-key
+GEMINI_LIVE_THINKING_LEVEL=minimal
 ```
 
 如果 `.env` 同時有 `GOOGLE_API_KEY` 和 `GEMINI_API_KEY`，Google SDK 會優先使用 `GOOGLE_API_KEY`，執行時會看到提示。要明確使用 `GEMINI_API_KEY`，請移除或 unset `GOOGLE_API_KEY`。
@@ -97,6 +98,18 @@ GEMINI_LIVE_MODEL=gemini-live-2.5-flash-native-audio
 ```
 
 Vertex 模式不需要 `GEMINI_API_KEY`。JSON 路徑建議使用絕對路徑，service account 必須具備呼叫 Vertex AI 的權限，且專案需啟用 Vertex AI API。未設定 location 時預設為 `us-central1`，未設定 model 時預設為 `gemini-live-2.5-flash-native-audio`。此 Live model 不支援 `global` endpoint。
+
+Gemini 3.1 Flash Live 使用 `GEMINI_LIVE_THINKING_LEVEL` 設定思考強度：`minimal`（預設、最低延遲）、`low`、`medium` 或 `high`；不再支援 `thinkingBudget`。如需在開始即時對話前植入既有對話，可設定 `GEMINI_LIVE_INITIAL_HISTORY_JSON` 為 `Content[]` JSON，例如：
+
+```env
+GEMINI_LIVE_INITIAL_HISTORY_JSON='[{"role":"user","parts":[{"text":"We already discussed a travel plan."}]},{"role":"model","parts":[{"text":"Yes, we selected Taipei."}]}]'
+```
+
+程式會先開啟 `initial_history_in_client_content`，再以 `send_client_content(..., turn_complete=True)` 傳送這段初始歷史；之後的音訊與即時文字一律透過 `send_realtime_input`，不會混用兩種訊息流程。
+
+`gemini-live-2.5-flash-native-audio` 仍完整保留原本流程：不會送出 Gemini 3 的 `thinkingLevel` 或 `history_config`，手動 VAD 時也維持原本的 `TURN_INCLUDES_ALL_INPUT`。若要設定 2.5 的思考，使用 `GEMINI_LIVE_THINKING_BUDGET`（`-1` 動態思考、`0` 關閉、`1` 到 `24576` 指定 token 預算）；未設定時維持 API 的動態思考預設值。2.5 的 `send_client_content` 仍是一般逐輪訊息機制，因此本程式的「初始歷史」JSON 選項只適用於 3.1。
+
+Gemini 2.5 另可啟用情緒感知對話：設定 `GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG=true`。預設為關閉；啟用時程式會選用必要的 `v1alpha` API 版本，並在工作階段設定傳送 `enable_affective_dialog=true`。此功能不支援 Gemini 3.1 Flash Live；若在 3.1 啟用，程式會在連線前明確報錯。
 
 **2. 轉換 scenario**
 

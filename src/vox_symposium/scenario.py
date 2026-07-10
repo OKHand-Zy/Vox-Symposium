@@ -23,6 +23,10 @@ DIALOGUE_BEHAVIOR = (
     "natural opening for the other speaker to continue, grounded in the existing conversation."
 )
 
+MINICPM_DIALOGUE_BEHAVIOR = (
+    "Keep each reply under 2 sentences. Ask at most one question. Do not summarize repeatedly."
+)
+
 
 @dataclass(frozen=True)
 class LoadedScenario:
@@ -32,8 +36,12 @@ class LoadedScenario:
     def id(self) -> str:
         return str(self.data["id"])
 
-    def build_instructions(self, agent: AgentKey) -> str:
-        return build_agent_instructions(self.data, agent)
+    def build_instructions(self, agent: AgentKey, *, dialogue_behavior_extra: str | None = None) -> str:
+        return build_agent_instructions(
+            self.data,
+            agent,
+            dialogue_behavior_extra=dialogue_behavior_extra,
+        )
 
 
 def load_scenario(
@@ -157,7 +165,12 @@ def normalize_scenario(
     return scenario
 
 
-def build_agent_instructions(scenario: dict[str, Any], agent: AgentKey) -> str:
+def build_agent_instructions(
+    scenario: dict[str, Any],
+    agent: AgentKey,
+    *,
+    dialogue_behavior_extra: str | None = None,
+) -> str:
     if agent not in {"citizen", "scholar"}:
         raise ValueError(f"Unsupported scenario agent: {agent}")
 
@@ -184,6 +197,7 @@ def build_agent_instructions(scenario: dict[str, Any], agent: AgentKey) -> str:
         "",
         "Dialogue behavior:",
         DIALOGUE_BEHAVIOR,
+        *([dialogue_behavior_extra] if dialogue_behavior_extra else []),
         "",
         "Prior conversation history:",
     ]

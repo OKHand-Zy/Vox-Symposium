@@ -214,3 +214,7 @@ GEMINI_API_KEY=your-gemini-api-key
 OpenAI Realtime 可用 `OPENAI_REALTIME_REASONING_EFFORT=low` 設定 Realtime 2 的 reasoning effort。
 如果遇到 `ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout`，
 可先設定 `OPENAI_REALTIME_PING_INTERVAL=20` 與 `OPENAI_REALTIME_PING_TIMEOUT=120`。
+
+當某個角色使用 `provider=minicpm` 時，runner 會只在那位角色的 `Dialogue behavior`
+自動追加短回覆規則：每次最多 2 句、最多問 1 個問題，且不要反覆總結。這不會套用到
+Gemini、OpenAI 或其他 provider 的角色。

@@ -313,8 +313,10 @@ MINICPM_REALTIME_URL=ws://127.0.0.1:8006/v1/realtime?mode=audio
 MINICPM_LENGTH_PENALTY=1.1
 MINICPM_INPUT_CHUNK_MS=1000
 MINICPM_QUEUE_TIMEOUT=300
-MINICPM_PING_INTERVAL=30
-MINICPM_PING_TIMEOUT=120
+# Long evaluation runs can disable Vox-side client keepalive ping after the
+# MiniCPM-o-Demo Gateway/Worker ping settings below are also disabled.
+MINICPM_PING_INTERVAL=none
+MINICPM_PING_TIMEOUT=none
 ```
 
 若 Gateway 前方的 reverse proxy 驗證 Bearer token：
@@ -366,10 +368,16 @@ afplay data/results/00000000-minicpm-smoke-artifacts/scholar-answer.wav
   刪除所有靜音區段。
 - MiniCPM 約在每次輸入 chunk 時計算 listen/speak。停止送 input 也會停止生成後續語音。
 - MiniCPM Gateway/Worker 推理期間若無法及時回 WebSocket ping，可能出現
-  `keepalive ping timeout`；先把 `MINICPM_PING_TIMEOUT` 調大，例如 `120` 或 `180`。
+  `keepalive ping timeout`；長批次 evaluation 建議同時關閉 MiniCPM-o-Demo
+  Gateway/Worker 的 WebSocket keepalive，並把 Vox 端 `MINICPM_PING_INTERVAL` /
+  `MINICPM_PING_TIMEOUT` 設為 `none`。
 - Vox Symposium evaluation 在模型說話期間會持續送入即時靜音，直到模型回到 `listen`，
   避免 WAV 說到一半被中斷。
 - 一般 LiveKit participant 本身已有連續音訊輸入，不需要 evaluation 的額外靜音泵。
+- Vox 會在使用 `provider=minicpm` 的那位角色的 `Dialogue behavior` 自動追加短回覆規則：
+  `Keep each reply under 2 sentences. Ask at most one question. Do not summarize repeatedly.`
+  這是為了降低 MiniCPM 長回覆造成的 session 時間、turn-taking 和 downstream Gemini Live
+  連線風險；不會套用到 OpenAI、Gemini 或其他 provider 的角色。
 - `text` 和 `audio` delta 不保證一一對應。
 - 如果 console 或 `dialogue-log.json` 只看到句首，例如 `嗯，这`，但 WAV 播放正常，
   通常是文字 delta 比音訊晚到；先調大 `--text-max-wait` 或 `--text-idle-timeout`。
@@ -384,6 +392,68 @@ afplay data/results/00000000-minicpm-smoke-artifacts/scholar-answer.wav
 - `ws://` 與 `wss://` 是否和 Gateway 的 HTTP/TLS 模式一致。
 - URL 是否錯用 `0.0.0.0`。
 - SSH tunnel 後方的遠端 8006 是否真的有 Gateway listener。
+
+### `keepalive ping timeout`
+
+常見錯誤：
+
+```text
+ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received
+ConnectionClosedError: received 1011 (internal error) keepalive ping timeout; then sent 1011 (internal error) keepalive ping timeout
+```
+
+如果只調 Vox Symposium 的 `MINICPM_PING_INTERVAL` / `MINICPM_PING_TIMEOUT`，仍可能
+因 MiniCPM-o-Demo 內部 Gateway/Worker 連線使用預設 keepalive 而斷線。長批次測試可先把
+MiniCPM-o-Demo 三處 WebSocket keepalive 都關掉：
+
+`gateway.py` 對 Vox client 的 `uvicorn.run(...)`：
+
+```python
+uvicorn.run(
+    app,
+    host=args.host,
+    port=port,
+    ws_max_size=128 * 1024 * 1024,
+    ws_ping_interval=None,
+    ws_ping_timeout=None,
+    **ssl_kwargs,
+)
+```
+
+`gateway.py` 連到 Worker 的 `websockets.connect(...)`：
+
+```python
+worker_ws = await websockets.connect(
+    ws_url,
+    open_timeout=5,
+    max_size=128 * 1024 * 1024,
+    ping_interval=None,
+    ping_timeout=None,
+)
+```
+
+`worker.py` 對 Gateway 的 `uvicorn.run(...)`：
+
+```python
+uvicorn.run(
+    app,
+    host=args.host,
+    port=port,
+    ws_max_size=128 * 1024 * 1024,
+    ws_ping_interval=None,
+    ws_ping_timeout=None,
+)
+```
+
+Vox Symposium `.env` 也設為：
+
+```env
+MINICPM_PING_INTERVAL=none
+MINICPM_PING_TIMEOUT=none
+```
+
+改完後必須重啟 Gateway 和 Worker。若仍出現 `keepalive ping timeout`，再檢查 reverse proxy
+或 SSH tunnel 是否有自己的 WebSocket idle timeout。
 
 ### `session.closed: reason=backend_error`
 
