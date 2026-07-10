@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from vox_symposium.config import (
     gemini_live_model,
@@ -67,7 +67,11 @@ def build_model_from_settings(
             thinking_level=settings.gemini_thinking_level,
             thinking_budget=settings.gemini_thinking_budget,
             enable_affective_dialog=settings.gemini_enable_affective_dialog,
-            initial_history=settings.gemini_initial_history,
+            initial_history=(
+                (agent.initial_history or settings.gemini_initial_history)
+                if gemini_uses_thinking_level(settings.gemini_model)
+                else ()
+            ),
             manual_activity=evaluation_mode,
         )
 
@@ -139,6 +143,7 @@ def build_model_from_env(
     provider: str,
     instructions: str,
     *,
+    initial_history: tuple[dict[str, Any], ...] = (),
     evaluation_mode: bool = False,
 ) -> RealtimeAudioModel:
     provider = normalize_provider(provider)
@@ -166,6 +171,9 @@ def build_model_from_env(
         auth = load_gemini_auth()
         model = gemini_live_model(auth.backend)
         uses_thinking_level = gemini_uses_thinking_level(model)
+        gemini_initial_history = (
+            (initial_history or gemini_live_initial_history()) if uses_thinking_level else ()
+        )
         return GeminiLiveModel(
             api_key=auth.api_key,
             backend=auth.backend,
@@ -177,7 +185,7 @@ def build_model_from_env(
             thinking_level=gemini_thinking_level() if uses_thinking_level else "minimal",
             thinking_budget=None if uses_thinking_level else gemini_thinking_budget(),
             enable_affective_dialog=bool_env("GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG", False),
-            initial_history=gemini_live_initial_history(),
+            initial_history=gemini_initial_history if uses_thinking_level else (),
             manual_activity=evaluation_mode,
         )
 

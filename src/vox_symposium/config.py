@@ -37,6 +37,7 @@ class AgentConfig:
     identity: str
     provider: str
     instructions: str
+    initial_history: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -199,7 +200,9 @@ def load_settings() -> Settings:
         gemini_thinking_level=(gemini_thinking_level() if uses_gemini_thinking_level else "minimal"),
         gemini_thinking_budget=(None if uses_gemini_thinking_level else gemini_thinking_budget()),
         gemini_enable_affective_dialog=bool_env("GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG", False),
-        gemini_initial_history=gemini_live_initial_history(),
+        gemini_initial_history=(
+            gemini_live_initial_history() if uses_gemini_thinking_level else ()
+        ),
         minicpm_realtime_url=minicpm_url,
         minicpm_api_key=os.getenv("MINICPM_API_KEY") or None,
         minicpm_length_penalty=float_env("MINICPM_LENGTH_PENALTY", 1.1),
@@ -392,12 +395,18 @@ def _apply_scenario_instructions(
         audio_dir=os.getenv("SCENARIO_AUDIO_DIR"),
         dialogue_turns=int_env("SCENARIO_DIALOGUE_TURNS", 5),
     )
+    citizen_uses_initial_history = _uses_gemini_initial_history(agent_citizen.provider)
+    scholar_uses_initial_history = _uses_gemini_initial_history(agent_scholar.provider)
     return (
         replace(
             agent_citizen,
             instructions=scenario.build_instructions(
                 "citizen",
                 dialogue_behavior_extra=_provider_dialogue_behavior_extra(agent_citizen.provider),
+                include_history=not citizen_uses_initial_history,
+            ),
+            initial_history=(
+                scenario.build_initial_history("citizen") if citizen_uses_initial_history else ()
             ),
         ),
         replace(
@@ -405,6 +414,10 @@ def _apply_scenario_instructions(
             instructions=scenario.build_instructions(
                 "scholar",
                 dialogue_behavior_extra=_provider_dialogue_behavior_extra(agent_scholar.provider),
+                include_history=not scholar_uses_initial_history,
+            ),
+            initial_history=(
+                scenario.build_initial_history("scholar") if scholar_uses_initial_history else ()
             ),
         ),
     )
@@ -417,6 +430,13 @@ def _provider_dialogue_behavior_extra(provider: str) -> str | None:
     from vox_symposium.scenario import MINICPM_DIALOGUE_BEHAVIOR
 
     return MINICPM_DIALOGUE_BEHAVIOR
+
+
+def _uses_gemini_initial_history(provider: str) -> bool:
+    if normalize_provider(provider) != "gemini":
+        return False
+    backend = normalized_env("GEMINI_BACKEND", "ai_studio")
+    return gemini_uses_thinking_level(gemini_live_model(backend))
 
 
 def _uses_provider(provider: str, *agents: AgentConfig) -> bool:

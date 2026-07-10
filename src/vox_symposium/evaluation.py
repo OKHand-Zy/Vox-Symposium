@@ -17,7 +17,7 @@ from typing import Any, TextIO
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from vox_symposium.audio import PcmAudio, rechunk_pcm16
-from vox_symposium.config import gemini_live_model
+from vox_symposium.config import gemini_live_model, gemini_uses_thinking_level
 from vox_symposium.env import env_with_legacy, normalized_env
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.models.factory import build_model_from_env
@@ -267,19 +267,25 @@ async def _run_scenario_evaluation(
 
     citizen_provider = _agent_provider("citizen")
     scholar_provider = _agent_provider("scholar")
+    citizen_uses_initial_history = _uses_gemini_initial_history(citizen_provider)
+    scholar_uses_initial_history = _uses_gemini_initial_history(scholar_provider)
     citizen = _build_model(
         "citizen",
         scenario.build_instructions(
             "citizen",
             dialogue_behavior_extra=_provider_dialogue_behavior_extra(citizen_provider),
+            include_history=not citizen_uses_initial_history,
         ),
+        initial_history=(scenario.build_initial_history("citizen") if citizen_uses_initial_history else ()),
     )
     scholar = _build_model(
         "scholar",
         scenario.build_instructions(
             "scholar",
             dialogue_behavior_extra=_provider_dialogue_behavior_extra(scholar_provider),
+            include_history=not scholar_uses_initial_history,
         ),
+        initial_history=(scenario.build_initial_history("scholar") if scholar_uses_initial_history else ()),
     )
     models = {"citizen": citizen, "scholar": scholar}
 
@@ -623,8 +629,18 @@ async def _collect_text_after_audio(
     return "".join(parts).strip()
 
 
-def _build_model(agent: str, instructions: str) -> RealtimeAudioModel:
-    return build_model_from_env(_agent_provider(agent), instructions, evaluation_mode=True)
+def _build_model(
+    agent: str,
+    instructions: str,
+    *,
+    initial_history: tuple[dict[str, Any], ...] = (),
+) -> RealtimeAudioModel:
+    return build_model_from_env(
+        _agent_provider(agent),
+        instructions,
+        initial_history=initial_history,
+        evaluation_mode=True,
+    )
 
 
 def _agent_provider(agent: str) -> str:
@@ -635,6 +651,12 @@ def _agent_provider(agent: str) -> str:
             default=_default_provider(agent),
         )
     )
+
+
+def _uses_gemini_initial_history(provider: str) -> bool:
+    if normalize_provider(provider) != "gemini":
+        return False
+    return gemini_uses_thinking_level(gemini_live_model(normalized_env("GEMINI_BACKEND", "ai_studio")))
 
 
 def _provider_dialogue_behavior_extra(provider: str) -> str | None:

@@ -105,7 +105,7 @@ Gemini 3.1 Flash Live 使用 `GEMINI_LIVE_THINKING_LEVEL` 設定思考強度：`
 GEMINI_LIVE_INITIAL_HISTORY_JSON='[{"role":"user","parts":[{"text":"We already discussed a travel plan."}]},{"role":"model","parts":[{"text":"Yes, we selected Taipei."}]}]'
 ```
 
-程式會先開啟 `initial_history_in_client_content`，再以 `send_client_content(..., turn_complete=True)` 傳送這段初始歷史；之後的音訊與即時文字一律透過 `send_realtime_input`，不會混用兩種訊息流程。
+程式會先開啟 `initial_history_in_client_content`，再以 `send_client_content(..., turn_complete=True)` 傳送這段初始歷史；之後的音訊與即時文字一律透過 `send_realtime_input`，不會混用兩種訊息流程。設定 `SCENARIO_FILE` 時，不必將每筆資料序列化到環境變數：程式會將每個 scenario 的完整 `history` 轉成 agent-relative `Content[]`（對方為 `user`、自身為 `model`），並取代這個環境變數的 fallback。固定角色規則、人格、場景與目標則保留在 system instruction。opening 仍會以即時音訊送給接收者，因此不會被誤當成已完成歷史。Scenario history 不會被摘要、截斷或改寫；若超過模型 context 上限，Gemini API 會直接回報限制錯誤。
 
 `gemini-live-2.5-flash-native-audio` 仍完整保留原本流程：不會送出 Gemini 3 的 `thinkingLevel` 或 `history_config`，手動 VAD 時也維持原本的 `TURN_INCLUDES_ALL_INPUT`。若要設定 2.5 的思考，使用 `GEMINI_LIVE_THINKING_BUDGET`（`-1` 動態思考、`0` 關閉、`1` 到 `24576` 指定 token 預算）；未設定時維持 API 的動態思考預設值。2.5 的 `send_client_content` 仍是一般逐輪訊息機制，因此本程式的「初始歷史」JSON 選項只適用於 3.1。
 

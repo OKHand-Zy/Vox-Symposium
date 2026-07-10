@@ -36,12 +36,22 @@ class LoadedScenario:
     def id(self) -> str:
         return str(self.data["id"])
 
-    def build_instructions(self, agent: AgentKey, *, dialogue_behavior_extra: str | None = None) -> str:
+    def build_instructions(
+        self,
+        agent: AgentKey,
+        *,
+        dialogue_behavior_extra: str | None = None,
+        include_history: bool = True,
+    ) -> str:
         return build_agent_instructions(
             self.data,
             agent,
             dialogue_behavior_extra=dialogue_behavior_extra,
+            include_history=include_history,
         )
+
+    def build_initial_history(self, agent: AgentKey) -> tuple[dict[str, Any], ...]:
+        return build_agent_initial_history(self.data, agent)
 
 
 def load_scenario(
@@ -170,6 +180,7 @@ def build_agent_instructions(
     agent: AgentKey,
     *,
     dialogue_behavior_extra: str | None = None,
+    include_history: bool = True,
 ) -> str:
     if agent not in {"citizen", "scholar"}:
         raise ValueError(f"Unsupported scenario agent: {agent}")
@@ -198,22 +209,55 @@ def build_agent_instructions(
         "Dialogue behavior:",
         DIALOGUE_BEHAVIOR,
         *([dialogue_behavior_extra] if dialogue_behavior_extra else []),
-        "",
-        "Prior conversation history:",
     ]
-
-    history = list(scenario.get("history") or [])
-    opening = scenario.get("opening")
-    turns_for_prompt = [
-        *history,
-        *([opening] if opening and opening.get("agent") == agent else []),
-    ]
-    if turns_for_prompt:
-        lines.extend(_format_turn(turn) for turn in turns_for_prompt)
-    else:
-        lines.append("- No prior turns are available.")
+    if include_history:
+        lines.extend(_history_lines_for_agent(scenario, agent))
 
     return "\n".join(lines)
+
+
+def build_agent_initial_history(
+    scenario: dict[str, Any],
+    agent: AgentKey,
+) -> tuple[dict[str, Any], ...]:
+    """Build Gemini Live Content[] history from a scenario's completed turns.
+
+    The opening turn remains realtime input for its recipient, so it is seeded
+    only for the speaker that already produced it.
+    """
+    if agent not in {"citizen", "scholar"}:
+        raise ValueError(f"Unsupported scenario agent: {agent}")
+
+    turns = list(scenario.get("history") or [])
+    opening = scenario.get("opening")
+    if opening and opening.get("agent") == agent:
+        turns.append(opening)
+
+    history: list[dict[str, Any]] = []
+    for turn in turns:
+        speaker = turn.get("agent")
+        if speaker not in {"citizen", "scholar"}:
+            raise ValueError(f"Scenario history turn has unsupported agent: {speaker!r}")
+        history.append(
+            {
+                "role": "model" if speaker == agent else "user",
+                "parts": [{"text": str(turn.get("text", ""))}],
+            }
+        )
+    return tuple(history)
+
+
+def _history_lines_for_agent(scenario: dict[str, Any], agent: AgentKey) -> list[str]:
+    lines = ["", "Prior conversation history:"]
+    turns = list(scenario.get("history") or [])
+    opening = scenario.get("opening")
+    if opening and opening.get("agent") == agent:
+        turns.append(opening)
+    if turns:
+        lines.extend(_format_turn(turn) for turn in turns)
+    else:
+        lines.append("- No prior turns are available.")
+    return lines
 
 
 def write_scenarios(path: str | Path, scenarios: list[dict[str, Any]]) -> None:
