@@ -2,74 +2,108 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
-import os
-import shlex
-import shutil
-import subprocess
 import sys
-import wave
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TextIO
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from typing import Any
 
-from vox_symposium.audio import PcmAudio, rechunk_pcm16
-from vox_symposium.config import gemini_live_model, gemini_uses_thinking_level
-from vox_symposium.env import env_with_legacy, normalized_env
+from vox_symposium.audio import PcmAudio
+from vox_symposium.config import provider_uses_structured_history
+from vox_symposium.env import env_with_legacy, float_env, load_environment
+from vox_symposium.evaluation_artifacts import (
+    EvaluationArtifacts,
+    write_run_env_snapshot,
+    write_summary_report,
+)
+from vox_symposium.evaluation_artifacts import (
+    format_command as _format_command,
+)
+from vox_symposium.evaluation_artifacts import (
+    format_error as _format_error,
+)
+from vox_symposium.evaluation_artifacts import (
+    load_resume_results as _load_resume_results,
+)
+from vox_symposium.evaluation_artifacts import (
+    remove_failed_case_artifacts as _remove_failed_case_artifacts,
+)
+from vox_symposium.evaluation_artifacts import (
+    result_payload as _result_payload,
+)
+from vox_symposium.evaluation_artifacts import (
+    scenario_artifact_dir as _scenario_artifact_dir,
+)
+from vox_symposium.evaluation_artifacts import (
+    scenario_run_id as _scenario_run_id,
+)
+from vox_symposium.evaluation_artifacts import (
+    tee_console as _tee_console,
+)
+from vox_symposium.evaluation_audio import (
+    collect_text_after_audio as _collect_text_after_audio,
+)
+from vox_symposium.evaluation_audio import (
+    collect_utterance as _collect_utterance,
+)
+from vox_symposium.evaluation_audio import (
+    question_audio as _question_audio,
+)
+from vox_symposium.evaluation_audio import (
+    read_audio_stream as _read_audio,
+)
+from vox_symposium.evaluation_audio import (
+    read_text_stream as _read_text,
+)
+from vox_symposium.evaluation_audio import (
+    send_audio as _send_audio,
+)
+from vox_symposium.evaluation_audio import (
+    send_audio_file as _send_audio_file,
+)
+from vox_symposium.evaluation_audio import (
+    turn_audio as _turn_audio,
+)
+from vox_symposium.json_io import write_json
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.models.factory import build_model_from_env
-from vox_symposium.recording import RecordedAudio, audio_event_fields, write_wav
+from vox_symposium.providers import normalize_provider
+from vox_symposium.recording import audio_event_fields, write_wav
 from vox_symposium.scenario import (
     LoadedScenario,
-    MINICPM_DIALOGUE_BEHAVIOR,
     build_evaluation_result,
     load_scenarios,
     write_evaluation_result,
 )
-from vox_symposium.providers import normalize_provider
-
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-    def load_dotenv() -> bool:
-        return False
 
 
-@dataclass(frozen=True)
-class AudioUtterance:
-    agent: str
-    audio: PcmAudio
+class _ConsoleLoggedError(Exception):
+    """Signal that the original exception was already written to the run log."""
 
 
 async def run() -> None:
-    load_dotenv()
+    load_environment()
     args = _parse_args()
+    _validate_args(args)
     result_path = Path(args.result)
     base_run_id = args.run_id or result_path.stem
-    artifact_root = Path(args.artifact_dir) if args.artifact_dir else result_path.parent / f"{base_run_id}-artifacts"
-    artifact_root.mkdir(parents=True, exist_ok=True)
-    console_log_path = artifact_root / "console-log.txt"
-    summary_path = artifact_root / "summary.json"
+    artifacts = EvaluationArtifacts.create(
+        result_path,
+        run_id=base_run_id,
+        artifact_dir=args.artifact_dir,
+    )
 
-    with _tee_console(console_log_path):
-        print(f"Saving console log: {console_log_path}")
+    with _tee_console(artifacts.console_log):
+        print(f"Saving console log: {artifacts.console_log}")
         print(f"Command: {_format_command(sys.argv)}")
         try:
             await _run_evaluations(
                 args,
                 result_path=result_path,
                 base_run_id=base_run_id,
-                artifact_root=artifact_root,
-                console_log_path=console_log_path,
-                summary_path=summary_path,
+                artifacts=artifacts,
             )
         except Exception as exc:
             print(_format_error(exc), file=sys.stderr)
-            setattr(exc, "_vox_console_logged", True)
-            raise
+            raise _ConsoleLoggedError from exc
 
 
 async def _run_evaluations(
@@ -77,9 +111,7 @@ async def _run_evaluations(
     *,
     result_path: Path,
     base_run_id: str,
-    artifact_root: Path,
-    console_log_path: Path,
-    summary_path: Path,
+    artifacts: EvaluationArtifacts,
 ) -> None:
     scenarios = [
         LoadedScenario(data)
@@ -104,27 +136,26 @@ async def _run_evaluations(
     if (args.scenario_id is not None or args.scenario_index is not None) and len(scenarios) != 1:
         raise RuntimeError(f"Expected exactly one scenario, got {len(scenarios)}")
 
-    env_snapshot_path = _write_run_env_snapshot(artifact_root, run_id=base_run_id, args=args)
+    write_run_env_snapshot(artifacts.env_snapshot, run_id=base_run_id, args=args)
 
     start_index = args.start_index or 0
     total = loaded_total if start_index else len(scenarios)
     results = _load_resume_results(result_path, start_index=start_index)
     if total > 1 and args.answer_audio:
-        raise RuntimeError("--answer-audio can only be used when one scenario is selected with --id or --index")
-    if args.case_delay < 0:
-        raise RuntimeError("--case-delay must be at least 0")
+        raise RuntimeError(
+            "--answer-audio can only be used when one scenario is selected with --id or --index"
+        )
     if results:
-        print(f"Loaded {len(results)} completed result(s) before --start-index {start_index}: {result_path}")
+        print(
+            f"Loaded {len(results)} completed result(s) before --start-index {start_index}: {result_path}"
+        )
 
-    _write_summary_report(
-        summary_path,
+    write_summary_report(
         results,
         run_id=base_run_id,
         scenario_path=args.scenario,
         result_path=result_path,
-        artifact_root=artifact_root,
-        env_snapshot_path=env_snapshot_path,
-        console_log_path=console_log_path,
+        artifacts=artifacts,
         total_cases=total,
     )
     print("==========")
@@ -140,24 +171,21 @@ async def _run_evaluations(
             args,
             scenario=scenario,
             run_id=run_id,
-            artifact_root=artifact_root,
-            env_snapshot_path=env_snapshot_path,
+            artifact_root=artifacts.root,
+            env_snapshot_path=artifacts.env_snapshot,
         )
-        result["artifacts"]["console_log"] = str(console_log_path)
-        result["artifacts"]["summary"] = str(summary_path)
+        result["artifacts"]["console_log"] = str(artifacts.console_log)
+        result["artifacts"]["summary"] = str(artifacts.summary)
         result["case_index"] = index
         result["case_number"] = index + 1
         results.append(result)
         write_evaluation_result(result_path, _result_payload(results, total=total))
-        _write_summary_report(
-            summary_path,
+        write_summary_report(
             results,
             run_id=base_run_id,
             scenario_path=args.scenario,
             result_path=result_path,
-            artifact_root=artifact_root,
-            env_snapshot_path=env_snapshot_path,
-            console_log_path=console_log_path,
+            artifacts=artifacts,
             total_cases=total,
         )
         response = result["response"]
@@ -189,11 +217,6 @@ async def _run_scenario_with_retries(
     env_snapshot_path: Path,
 ) -> dict[str, Any]:
     attempts = args.case_retries
-    if attempts < 1:
-        raise RuntimeError("--case-retries must be at least 1")
-    if args.case_retry_delay < 0:
-        raise RuntimeError("--case-retry-delay must be at least 0")
-
     for attempt in range(1, attempts + 1):
         try:
             if attempt > 1:
@@ -267,25 +290,25 @@ async def _run_scenario_evaluation(
 
     citizen_provider = _agent_provider("citizen")
     scholar_provider = _agent_provider("scholar")
-    citizen_uses_initial_history = _uses_gemini_initial_history(citizen_provider)
-    scholar_uses_initial_history = _uses_gemini_initial_history(scholar_provider)
+    citizen_prompt = scenario.build_prompt(
+        "citizen",
+        provider=citizen_provider,
+        use_structured_history=provider_uses_structured_history(citizen_provider),
+    )
+    scholar_prompt = scenario.build_prompt(
+        "scholar",
+        provider=scholar_provider,
+        use_structured_history=provider_uses_structured_history(scholar_provider),
+    )
     citizen = _build_model(
         "citizen",
-        scenario.build_instructions(
-            "citizen",
-            dialogue_behavior_extra=_provider_dialogue_behavior_extra(citizen_provider),
-            include_history=not citizen_uses_initial_history,
-        ),
-        initial_history=(scenario.build_initial_history("citizen") if citizen_uses_initial_history else ()),
+        citizen_prompt.instructions,
+        initial_history=citizen_prompt.initial_history,
     )
     scholar = _build_model(
         "scholar",
-        scenario.build_instructions(
-            "scholar",
-            dialogue_behavior_extra=_provider_dialogue_behavior_extra(scholar_provider),
-            include_history=not scholar_uses_initial_history,
-        ),
-        initial_history=(scenario.build_initial_history("scholar") if scholar_uses_initial_history else ()),
+        scholar_prompt.instructions,
+        initial_history=scholar_prompt.initial_history,
     )
     models = {"citizen": citizen, "scholar": scholar}
 
@@ -307,8 +330,12 @@ async def _run_scenario_evaluation(
     try:
         await asyncio.gather(citizen.connect(), scholar.connect())
         for agent, model in models.items():
-            reader_tasks.append(asyncio.create_task(_read_audio(model, audio_queues[agent]), name=f"{agent}-audio"))
-            reader_tasks.append(asyncio.create_task(_read_text(model, text_queues[agent]), name=f"{agent}-text"))
+            reader_tasks.append(
+                asyncio.create_task(_read_audio(model, audio_queues[agent]), name=f"{agent}-audio")
+            )
+            reader_tasks.append(
+                asyncio.create_task(_read_text(model, text_queues[agent]), name=f"{agent}-text")
+            )
 
         next_agent = await _play_opening(
             scenario.data,
@@ -338,7 +365,7 @@ async def _run_scenario_evaluation(
         _drain_queue(audio_queues["scholar"])
         question_audio = _question_audio(
             scenario.data,
-            question_audio=args.question_audio,
+            question_audio_override=args.question_audio,
             artifact_dir=artifact_dir,
             scenario_dir=Path(args.scenario).parent,
             disable_tts=args.no_tts,
@@ -352,7 +379,9 @@ async def _run_scenario_evaluation(
             }
         )
         print(f"Playing evaluation question into scholar: {question_audio}")
-        await _send_audio_file(question_audio, scholar, frame_ms=args.frame_ms, audio_speed=args.audio_speed)
+        await _send_audio_file(
+            question_audio, scholar, frame_ms=args.frame_ms, audio_speed=args.audio_speed
+        )
 
         answer = await _collect_utterance(
             "scholar",
@@ -360,8 +389,10 @@ async def _run_scenario_evaluation(
             idle_timeout=args.idle_timeout,
             max_seconds=args.max_utterance_seconds,
         )
-        answer_audio = Path(args.answer_audio) if args.answer_audio else artifact_dir / "scholar-answer.wav"
-        answer_recording = _write_wav(answer_audio, answer.audio)
+        answer_audio = (
+            Path(args.answer_audio) if args.answer_audio else artifact_dir / "scholar-answer.wav"
+        )
+        answer_recording = write_wav(answer_audio, answer.audio)
         answer_text = await _collect_text_after_audio(
             text_queues["scholar"],
             idle_timeout=args.text_idle_timeout,
@@ -378,7 +409,7 @@ async def _run_scenario_evaluation(
         print(f"Captured scholar answer evaluation question: {answer_audio}")
 
         dialogue_log_path = artifact_dir / "dialogue-log.json"
-        _write_json(dialogue_log_path, dialogue_log)
+        write_json(dialogue_log_path, dialogue_log)
         result = build_evaluation_result(
             scenario.data,
             response_text=answer_text,
@@ -400,18 +431,18 @@ async def _run_scenario_evaluation(
         for task in reader_tasks:
             task.cancel()
         await asyncio.gather(citizen.close(), scholar.close(), return_exceptions=True)
+        if reader_tasks:
+            await asyncio.gather(*reader_tasks, return_exceptions=True)
 
 
 def main() -> None:
     try:
         asyncio.run(run())
+    except _ConsoleLoggedError as exc:
+        raise SystemExit(1) from exc
     except RuntimeError as exc:
-        if getattr(exc, "_vox_console_logged", False):
-            raise SystemExit(1) from exc
         raise SystemExit(_format_error(exc)) from exc
     except Exception as exc:
-        if getattr(exc, "_vox_console_logged", False):
-            raise SystemExit(1) from exc
         raise SystemExit(_format_error(exc)) from exc
 
 
@@ -430,7 +461,7 @@ async def _play_opening(
 
     opening_agent = opening["agent"]
     receiver = _other_agent(opening_agent)
-    opening_audio = _turn_audio(opening, artifact_dir=artifact_dir)
+    opening_audio = _turn_audio(opening)
     dialogue_log["events"].append(
         {
             "type": "opening_playback",
@@ -441,7 +472,9 @@ async def _play_opening(
         }
     )
     print(f"Playing opening from {opening_agent} into {receiver}: {opening_audio}")
-    await _send_audio_file(opening_audio, models[receiver], frame_ms=frame_ms, audio_speed=audio_speed)
+    await _send_audio_file(
+        opening_audio, models[receiver], frame_ms=frame_ms, audio_speed=audio_speed
+    )
     return receiver
 
 
@@ -479,7 +512,7 @@ async def _run_dialogue_turns(
         if current_agent == "scholar":
             scholar_turns += 1
         utterance_path = artifact_dir / f"dialogue-{event_index:02d}-{current_agent}.wav"
-        recording = _write_wav(utterance_path, utterance.audio)
+        recording = write_wav(utterance_path, utterance.audio)
         text = await _collect_text_after_audio(
             text_queues[current_agent],
             idle_timeout=text_idle_timeout,
@@ -502,7 +535,9 @@ async def _run_dialogue_turns(
 
         receiver = _other_agent(current_agent)
         _drain_queue(text_queues[receiver])
-        await _send_audio(utterance.audio, models[receiver], frame_ms=frame_ms, audio_speed=audio_speed)
+        await _send_audio(
+            utterance.audio, models[receiver], frame_ms=frame_ms, audio_speed=audio_speed
+        )
         current_agent = receiver
 
     return scholar_turns
@@ -514,119 +549,6 @@ def _format_dialogue_capture(agent: str, turn_index: int, text: str = "") -> str
     if text:
         return f"{message}: {text}"
     return message
-
-
-async def _collect_utterance(
-    agent: str,
-    queue: asyncio.Queue[PcmAudio | None],
-    *,
-    idle_timeout: float,
-    max_seconds: float,
-) -> AudioUtterance:
-    try:
-        first = await asyncio.wait_for(queue.get(), timeout=max_seconds)
-    except TimeoutError as exc:
-        raise RuntimeError(f"Timed out waiting for {agent} audio after {max_seconds:.1f}s") from exc
-    if first is None:
-        raise RuntimeError(f"{agent} model audio stream closed before an utterance was captured")
-
-    chunks = [first]
-    sample_rate = first.sample_rate
-    channels = first.channels
-    started_at = asyncio.get_running_loop().time()
-
-    while True:
-        remaining = max_seconds - (asyncio.get_running_loop().time() - started_at)
-        if remaining <= 0:
-            break
-        try:
-            item = await asyncio.wait_for(queue.get(), timeout=min(idle_timeout, remaining))
-        except TimeoutError:
-            break
-        if item is None:
-            break
-        chunks.append(item)
-
-    data = b"".join(chunk.data for chunk in chunks)
-    return AudioUtterance(agent=agent, audio=PcmAudio(data=data, sample_rate=sample_rate, channels=channels))
-
-
-async def _send_audio_file(path: Path, model: RealtimeAudioModel, *, frame_ms: int, audio_speed: float) -> None:
-    audio = _read_wav(path)
-    await _send_audio(audio, model, frame_ms=frame_ms, audio_speed=audio_speed)
-
-
-async def _send_audio(audio: PcmAudio, model: RealtimeAudioModel, *, frame_ms: int, audio_speed: float) -> None:
-    frame_seconds = _frame_sleep_seconds(frame_ms, audio_speed)
-    await model.start_audio_turn()
-    try:
-        for chunk in rechunk_pcm16(audio.data, audio.sample_rate, frame_ms):
-            await model.send_audio(PcmAudio(data=chunk, sample_rate=audio.sample_rate, channels=audio.channels))
-            await asyncio.sleep(frame_seconds)
-
-        silence_bytes = int(audio.sample_rate * 0.2) * 2
-        silence = b"\x00" * silence_bytes
-        for chunk in rechunk_pcm16(silence, audio.sample_rate, frame_ms):
-            await model.send_audio(PcmAudio(data=chunk, sample_rate=audio.sample_rate, channels=1))
-            await asyncio.sleep(frame_seconds)
-    finally:
-        await model.end_audio_turn()
-
-
-async def _read_audio(model: RealtimeAudioModel, queue: asyncio.Queue[PcmAudio | None]) -> None:
-    try:
-        async for audio in model.receive_audio():
-            await queue.put(audio)
-    finally:
-        await queue.put(None)
-
-
-async def _read_text(model: RealtimeAudioModel, queue: asyncio.Queue[str | None]) -> None:
-    try:
-        async for text in model.receive_text():
-            await queue.put(text)
-    finally:
-        await queue.put(None)
-
-
-async def _collect_text_after_audio(
-    queue: asyncio.Queue[str | None],
-    *,
-    idle_timeout: float,
-    max_wait: float,
-) -> str:
-    if idle_timeout < 0:
-        raise RuntimeError("--text-idle-timeout must be at least 0")
-    if max_wait < 0:
-        raise RuntimeError("--text-max-wait must be at least 0")
-
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + max_wait
-    parts: list[str] = []
-    while True:
-        while True:
-            try:
-                item = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if item is None:
-                return "".join(parts).strip()
-            if item:
-                parts.append(item)
-
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            break
-
-        try:
-            item = await asyncio.wait_for(queue.get(), timeout=min(idle_timeout, remaining))
-        except TimeoutError:
-            break
-        if item is None:
-            break
-        if item:
-            parts.append(item)
-    return "".join(parts).strip()
 
 
 def _build_model(
@@ -651,159 +573,6 @@ def _agent_provider(agent: str) -> str:
             default=_default_provider(agent),
         )
     )
-
-
-def _uses_gemini_initial_history(provider: str) -> bool:
-    if normalize_provider(provider) != "gemini":
-        return False
-    return gemini_uses_thinking_level(gemini_live_model(normalized_env("GEMINI_BACKEND", "ai_studio")))
-
-
-def _provider_dialogue_behavior_extra(provider: str) -> str | None:
-    if normalize_provider(provider) == "minicpm":
-        return MINICPM_DIALOGUE_BEHAVIOR
-    return None
-
-
-def _question_audio(
-    scenario: dict[str, Any],
-    *,
-    question_audio: str | None,
-    artifact_dir: Path,
-    scenario_dir: Path,
-    disable_tts: bool,
-) -> Path:
-    explicit = question_audio or (scenario.get("evaluation") or {}).get("question_audio")
-    if explicit:
-        path = _resolve_question_audio_path(explicit, scenario_dir=scenario_dir)
-        return _ensure_wav(path, artifact_dir / "question.wav")
-
-    if disable_tts:
-        raise RuntimeError("No evaluation.question_audio is set and --no-tts was used")
-
-    path = artifact_dir / "question.wav"
-    _synthesize_question_audio(_question_text(scenario), path)
-    return path
-
-
-def _resolve_question_audio_path(path_text: str, *, scenario_dir: Path) -> Path:
-    path = Path(path_text)
-    candidates = [path]
-    if not path.is_absolute():
-        candidates.extend(
-            [
-                scenario_dir / path,
-                scenario_dir.parent / "question" / path.name,
-                Path("data/question") / path.name,
-            ]
-        )
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    checked = ", ".join(str(candidate) for candidate in candidates)
-    raise RuntimeError(f"Question audio does not exist. Checked: {checked}")
-
-
-def _ensure_wav(path: Path, output: Path) -> Path:
-    if path.suffix.lower() == ".wav":
-        return path
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise RuntimeError(f"Question audio is {path.suffix}, but ffmpeg is not available to convert it to wav")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            ffmpeg,
-            "-y",
-            "-i",
-            str(path),
-            "-ac",
-            "1",
-            "-ar",
-            "24000",
-            "-sample_fmt",
-            "s16",
-            str(output),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return output
-
-
-def _question_text(scenario: dict[str, Any]) -> str:
-    evaluation = scenario.get("evaluation") or {}
-    choices = " ".join(str(choice) for choice in evaluation.get("choices") or [])
-    return f"{evaluation.get('question', '')} {choices} Answer with A, B, C, or D."
-
-
-def _synthesize_question_audio(text: str, output: Path) -> None:
-    say = shutil.which("say")
-    afconvert = shutil.which("afconvert")
-    if not say or not afconvert:
-        raise RuntimeError("No question_audio is set, and macOS say/afconvert are not available")
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    aiff = output.with_suffix(".aiff")
-    subprocess.run([say, "-o", str(aiff), text], check=True)
-    subprocess.run([afconvert, "-f", "WAVE", "-d", "LEI16@24000", str(aiff), str(output)], check=True)
-    audio = _read_wav(output)
-    duration = len(audio.data) / (audio.sample_rate * 2)
-    if duration < 0.5:
-        raise RuntimeError(
-            "Generated question audio is too short. Set evaluation.question_audio or pass --question-audio."
-        )
-
-
-def _turn_audio(turn: dict[str, Any], *, artifact_dir: Path) -> Path:
-    audio = turn.get("audio")
-    if audio:
-        path = Path(audio)
-        if path.exists():
-            return path
-    raise RuntimeError(
-        f"Opening turn has no usable audio. Expected an existing audio path, got {audio!r}."
-    )
-
-
-def _read_wav(path: Path) -> PcmAudio:
-    with wave.open(str(path), "rb") as wav:
-        channels = wav.getnchannels()
-        sample_rate = wav.getframerate()
-        sample_width = wav.getsampwidth()
-        if sample_width != 2:
-            raise RuntimeError(f"{path} must be 16-bit PCM wav, got sample width {sample_width}")
-        data = wav.readframes(wav.getnframes())
-    return PcmAudio(data=data, sample_rate=sample_rate, channels=channels)
-
-
-def _write_wav(path: Path, audio: PcmAudio) -> RecordedAudio:
-    return write_wav(path, audio)
-
-
-def _scenario_artifact_dir(artifact_root: Path, scenario: dict[str, Any]) -> Path:
-    return artifact_root / _safe_path_segment(_scenario_row_id(scenario))
-
-
-def _scenario_run_id(base_run_id: str, scenario: dict[str, Any], *, index: int, total: int) -> str:
-    if total == 1:
-        return base_run_id
-    return f"{base_run_id}-{index + 1:04d}-{_safe_path_segment(_scenario_row_id(scenario))}"
-
-
-def _remove_failed_case_artifacts(artifact_root: Path, scenario: dict[str, Any]) -> None:
-    artifact_dir = _scenario_artifact_dir(artifact_root, scenario)
-    if not artifact_dir.exists():
-        return
-
-    root = artifact_root.resolve()
-    target = artifact_dir.resolve()
-    if target == root or not target.is_relative_to(root):
-        raise RuntimeError(f"Refusing to delete case artifacts outside artifact root: {artifact_dir}")
-
-    shutil.rmtree(artifact_dir)
-    print(f"Deleted failed case artifact directory: {artifact_dir}")
 
 
 def _limit_scenarios(
@@ -833,372 +602,6 @@ def _limit_scenarios(
     return selected[:limit]
 
 
-def _result_payload(results: list[dict[str, Any]], *, total: int) -> dict[str, Any] | list[dict[str, Any]]:
-    if total == 1:
-        return results[0]
-    return results
-
-
-def _load_resume_results(path: Path, *, start_index: int) -> list[dict[str, Any]]:
-    if start_index <= 0 or not path.is_file():
-        return []
-
-    with path.open("r", encoding="utf-8") as file:
-        payload = json.load(file)
-    existing = payload if isinstance(payload, list) else [payload]
-
-    results: list[dict[str, Any]] = []
-    for fallback_index, result in enumerate(existing):
-        if not isinstance(result, dict):
-            continue
-        case_index = _result_case_index(result, fallback_index)
-        if case_index >= start_index:
-            continue
-        resumed = dict(result)
-        resumed["case_index"] = case_index
-        resumed["case_number"] = case_index + 1
-        results.append(resumed)
-    return results
-
-
-def _result_case_index(result: dict[str, Any], fallback_index: int) -> int:
-    try:
-        return int(result.get("case_index", fallback_index))
-    except (TypeError, ValueError):
-        return fallback_index
-
-
-def _summary_report(
-    results: list[dict[str, Any]],
-    *,
-    run_id: str,
-    scenario_path: str,
-    result_path: Path,
-    artifact_root: Path,
-    env_snapshot_path: Path,
-    console_log_path: Path,
-    total_cases: int | None = None,
-) -> dict[str, Any]:
-    cases = [_summary_case(index, result) for index, result in enumerate(results)]
-    passed = sum(1 for case in cases if case["status"] == "passed")
-    failed = sum(1 for case in cases if case["status"] == "failed")
-    unknown = sum(1 for case in cases if case["status"] == "unknown")
-    completed = len(cases)
-    total = total_cases if total_cases is not None else completed
-    return {
-        "run_id": run_id,
-        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "scenario": scenario_path,
-        "result": str(result_path),
-        "artifact_root": str(artifact_root),
-        "env_snapshot": str(env_snapshot_path),
-        "console_log": str(console_log_path),
-        "total_cases": total,
-        "completed_cases": completed,
-        "passed_cases": passed,
-        "failed_cases": failed,
-        "unknown_cases": unknown,
-        "pass_rate": passed / total if total else None,
-        "completed_pass_rate": passed / completed if completed else None,
-        "cases": cases,
-    }
-
-
-def _summary_case(index: int, result: dict[str, Any]) -> dict[str, Any]:
-    response = result.get("response") or {}
-    evaluation = result.get("evaluation") or {}
-    artifacts = result.get("artifacts") or {}
-    is_correct = response.get("is_correct")
-    status = result.get("status") or ("passed" if is_correct is True else "failed" if is_correct is False else "unknown")
-    case_index = result.get("case_index", index)
-    return {
-        "index": case_index,
-        "case_number": result.get("case_number", case_index + 1),
-        "scenario_id": result.get("scenario_id"),
-        "run_id": result.get("run_id"),
-        "status": status,
-        "is_correct": is_correct,
-        "choice": response.get("choice"),
-        "correct_answer": evaluation.get("correct_answer"),
-        "response_text": response.get("text"),
-        "response_audio": response.get("audio"),
-        "dialogue_log": artifacts.get("dialogue_log"),
-        "error": result.get("error"),
-    }
-
-
-def _write_summary_report(
-    path: Path,
-    results: list[dict[str, Any]],
-    *,
-    run_id: str,
-    scenario_path: str,
-    result_path: Path,
-    artifact_root: Path,
-    env_snapshot_path: Path,
-    console_log_path: Path,
-    total_cases: int | None = None,
-) -> None:
-    report = _summary_report(
-        results,
-        run_id=run_id,
-        scenario_path=scenario_path,
-        result_path=result_path,
-        artifact_root=artifact_root,
-        env_snapshot_path=env_snapshot_path,
-        console_log_path=console_log_path,
-        total_cases=total_cases,
-    )
-    _write_json(path, report)
-
-
-def _scenario_row_id(scenario: dict[str, Any]) -> str:
-    source = scenario.get("source") or {}
-    value = scenario.get("row_id") or source.get("row_id") or source.get("raw_id") or scenario.get("id")
-    return str(value or "row")
-
-
-def _safe_path_segment(value: str) -> str:
-    cleaned = "".join(character if character.isalnum() or character in {"-", "_", "."} else "-" for character in value)
-    return cleaned.strip(".-") or "row"
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.tmp")
-
-    with tmp_path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, ensure_ascii=False, indent=2)
-        file.write("\n")
-        file.flush()
-        os.fsync(file.fileno())
-    tmp_path.replace(path)
-
-
-class _TeeStream:
-    def __init__(self, *streams: TextIO) -> None:
-        self._streams = streams
-
-    def write(self, data: str) -> int:
-        for stream in self._streams:
-            stream.write(data)
-        return len(data)
-
-    def flush(self) -> None:
-        for stream in self._streams:
-            stream.flush()
-
-    def isatty(self) -> bool:
-        return any(stream.isatty() for stream in self._streams)
-
-    @property
-    def encoding(self) -> str:
-        return getattr(self._streams[0], "encoding", None) or "utf-8"
-
-
-@contextmanager
-def _tee_console(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    should_separate = path.is_file() and path.stat().st_size > 0
-    separator_prefix = ""
-    if should_separate:
-        with path.open("rb") as existing:
-            existing.seek(-1, os.SEEK_END)
-            if existing.read(1) != b"\n":
-                separator_prefix = "\n"
-    with path.open("a", encoding="utf-8") as file:
-        if should_separate:
-            file.write(f"{separator_prefix}###################################\n")
-        stdout = _TeeStream(sys.stdout, file)
-        stderr = _TeeStream(sys.stderr, file)
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            yield
-
-
-def _format_command(argv: list[str]) -> str:
-    return " ".join(shlex.quote(part) for part in argv)
-
-
-def _format_error(exc: Exception) -> str:
-    if isinstance(exc, RuntimeError):
-        return f"Error: {exc}"
-    return f"Error: {type(exc).__name__}: {exc}"
-
-
-def _write_run_env_snapshot(artifact_dir: Path, *, run_id: str, args: argparse.Namespace) -> Path:
-    path = artifact_dir / "run-env.txt"
-    lines = [
-        "# Vox Symposium evaluation environment snapshot.",
-        "# Secrets such as API keys and API secrets are intentionally omitted.",
-        "# Values reflect the process environment after .env loading and runner defaults.",
-        "",
-        f"RUN_ID={_env_value(run_id)}",
-        f"SCENARIO={_env_value(args.scenario)}",
-        f"RESULT={_env_value(args.result)}",
-        f"DIALOGUE_TURNS={args.dialogue_turns}",
-        f"START_INDEX={args.start_index}",
-        f"LIMIT={_env_value(args.limit or '')}",
-        f"CASE_DELAY={args.case_delay}",
-        f"CASE_RETRIES={args.case_retries}",
-        f"CASE_RETRY_DELAY={args.case_retry_delay}",
-        f"OVERNIGHT={args.overnight}",
-        f"AUDIO_SPEED={args.audio_speed}",
-        f"FRAME_MS={args.frame_ms}",
-        "",
-    ]
-
-    for agent in ("citizen", "scholar"):
-        lines.extend(_agent_env_snapshot(agent))
-        lines.append("")
-
-    lines.extend(_provider_env_snapshot())
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    print(f"Saved environment snapshot: {path}")
-    return path
-
-
-def _agent_env_snapshot(agent: str) -> list[str]:
-    legacy_agent = "A" if agent == "citizen" else "B"
-    prefix = f"AGENT_{agent.upper()}"
-    provider = normalize_provider(
-        env_with_legacy(
-            f"{prefix}_PROVIDER",
-            f"AGENT_{legacy_agent}_PROVIDER",
-            default=_default_provider(agent),
-        )
-    )
-    identity = env_with_legacy(
-        f"{prefix}_IDENTITY",
-        f"AGENT_{legacy_agent}_IDENTITY",
-        default=f"agent-{agent}",
-    )
-    model, backend, extra = _effective_model_snapshot(provider)
-    lines = [
-        f"{prefix}_IDENTITY={_env_value(identity)}",
-        f"{prefix}_PROVIDER={_env_value(provider)}",
-        f"{prefix}_MODEL={_env_value(model)}",
-    ]
-    if backend:
-        lines.append(f"{prefix}_BACKEND={_env_value(backend)}")
-    lines.extend(f"{prefix}_{key}={_env_value(value)}" for key, value in extra.items())
-    return lines
-
-
-def _effective_model_snapshot(provider: str) -> tuple[str, str | None, dict[str, str]]:
-    provider = normalize_provider(provider)
-    if provider == "openai":
-        backend = normalized_env("OPENAI_BACKEND", "openai")
-        if backend in {"azure", "azure_openai"}:
-            return os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", ""), "azure", {}
-        return os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2"), "openai", {
-            "VOICE": os.getenv("OPENAI_REALTIME_VOICE", "marin"),
-            "REASONING_EFFORT": os.getenv("OPENAI_REALTIME_REASONING_EFFORT", ""),
-            "PING_INTERVAL": os.getenv("OPENAI_REALTIME_PING_INTERVAL", "20.0"),
-            "PING_TIMEOUT": os.getenv("OPENAI_REALTIME_PING_TIMEOUT", "20.0"),
-        }
-    if provider == "gemini":
-        backend = normalized_env("GEMINI_BACKEND", "ai_studio")
-        return gemini_live_model(backend), backend, {}
-    if provider == "minicpm":
-        return os.getenv("MINICPM_REALTIME_MODEL", "minicpm-realtime-gateway"), None, {
-            "PING_INTERVAL": os.getenv("MINICPM_PING_INTERVAL", "30.0"),
-            "PING_TIMEOUT": os.getenv("MINICPM_PING_TIMEOUT", "120.0"),
-        }
-    if provider == "freeze_omni":
-        return os.getenv("FREEZE_OMNI_MODEL", "freeze-omni"), "socketio", {
-            "REALTIME_URL": _redacted_url(os.getenv("FREEZE_OMNI_REALTIME_URL", "")),
-        }
-    if provider == "moshi":
-        return os.getenv("MOSHI_MODEL", "moshi"), "moshi", {
-            "REALTIME_URL": _redacted_url(os.getenv("MOSHI_REALTIME_URL", "")),
-        }
-    if provider == "personaplex":
-        return os.getenv("PERSONAPLEX_MODEL", "personaplex"), "moshi", {
-            "REALTIME_URL": _redacted_url(os.getenv("PERSONAPLEX_REALTIME_URL", "")),
-        }
-    return "", None, {}
-
-
-def _provider_env_snapshot() -> list[str]:
-    lines = [
-        "OPENAI_BACKEND=" + _env_value(normalized_env("OPENAI_BACKEND", "openai")),
-        "OPENAI_REALTIME_MODEL=" + _env_value(os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")),
-        "OPENAI_REALTIME_VOICE=" + _env_value(os.getenv("OPENAI_REALTIME_VOICE", "marin")),
-        "OPENAI_REALTIME_REASONING_EFFORT=" + _env_value(os.getenv("OPENAI_REALTIME_REASONING_EFFORT", "")),
-        "OPENAI_REALTIME_PING_INTERVAL=" + _env_value(os.getenv("OPENAI_REALTIME_PING_INTERVAL", "20.0")),
-        "OPENAI_REALTIME_PING_TIMEOUT=" + _env_value(os.getenv("OPENAI_REALTIME_PING_TIMEOUT", "20.0")),
-        "AZURE_OPENAI_DEPLOYMENT_NAME=" + _env_value(os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "")),
-        "AZURE_OPENAI_ENDPOINT=" + _env_value(os.getenv("AZURE_OPENAI_ENDPOINT", "")),
-        "AZURE_OPENAI_API_VERSION=" + _env_value(os.getenv("AZURE_OPENAI_API_VERSION", "")),
-        "",
-        "GEMINI_BACKEND=" + _env_value(normalized_env("GEMINI_BACKEND", "ai_studio")),
-        "GEMINI_LIVE_MODEL=" + _env_value(gemini_live_model(normalized_env("GEMINI_BACKEND", "ai_studio"))),
-        "GOOGLE_CLOUD_PROJECT=" + _env_value(os.getenv("GOOGLE_CLOUD_PROJECT", "")),
-        "GOOGLE_CLOUD_LOCATION=" + _env_value(os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")),
-        "",
-        "MINICPM_REALTIME_MODEL=" + _env_value(os.getenv("MINICPM_REALTIME_MODEL", "minicpm-realtime-gateway")),
-        "MINICPM_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("MINICPM_REALTIME_URL", ""))),
-        "MINICPM_LENGTH_PENALTY=" + _env_value(os.getenv("MINICPM_LENGTH_PENALTY", "1.1")),
-        "MINICPM_INPUT_CHUNK_MS=" + _env_value(os.getenv("MINICPM_INPUT_CHUNK_MS", "1000")),
-        "MINICPM_QUEUE_TIMEOUT=" + _env_value(os.getenv("MINICPM_QUEUE_TIMEOUT", "300.0")),
-        "MINICPM_PING_INTERVAL=" + _env_value(os.getenv("MINICPM_PING_INTERVAL", "30.0")),
-        "MINICPM_PING_TIMEOUT=" + _env_value(os.getenv("MINICPM_PING_TIMEOUT", "120.0")),
-        "",
-        "FREEZE_OMNI_MODEL=" + _env_value(os.getenv("FREEZE_OMNI_MODEL", "freeze-omni")),
-        "FREEZE_OMNI_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("FREEZE_OMNI_REALTIME_URL", ""))),
-        "FREEZE_OMNI_SSL_VERIFY=" + _env_value(os.getenv("FREEZE_OMNI_SSL_VERIFY", "false")),
-        "FREEZE_OMNI_INPUT_CHUNK_MS=" + _env_value(os.getenv("FREEZE_OMNI_INPUT_CHUNK_MS", "20")),
-        "FREEZE_OMNI_CONNECT_TIMEOUT=" + _env_value(os.getenv("FREEZE_OMNI_CONNECT_TIMEOUT", "60.0")),
-        "FREEZE_OMNI_CONNECT_RETRIES=" + _env_value(os.getenv("FREEZE_OMNI_CONNECT_RETRIES", "10")),
-        "FREEZE_OMNI_CONNECT_RETRY_DELAY=" + _env_value(os.getenv("FREEZE_OMNI_CONNECT_RETRY_DELAY", "5.0")),
-        "FREEZE_OMNI_PROMPT_TIMEOUT=" + _env_value(os.getenv("FREEZE_OMNI_PROMPT_TIMEOUT", "60.0")),
-        "FREEZE_OMNI_TURN_START_DELAY=" + _env_value(os.getenv("FREEZE_OMNI_TURN_START_DELAY", "3.0")),
-        "FREEZE_OMNI_TURN_PREROLL_SILENCE_MS=" + _env_value(os.getenv("FREEZE_OMNI_TURN_PREROLL_SILENCE_MS", "1200")),
-        "FREEZE_OMNI_MAX_INPUT_SILENCE_MS=" + _env_value(os.getenv("FREEZE_OMNI_MAX_INPUT_SILENCE_MS", "200")),
-        "FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD=" + _env_value(os.getenv("FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD", "800.0")),
-        "FREEZE_OMNI_POST_TURN_POLL_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_POLL_SECONDS", "60.0")),
-        "FREEZE_OMNI_POST_TURN_IDLE_SECONDS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_IDLE_SECONDS", "3.0")),
-        "FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS=" + _env_value(os.getenv("FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS", "160")),
-        "FREEZE_OMNI_STOP_RECORDING_AFTER_TURN=" + _env_value(os.getenv("FREEZE_OMNI_STOP_RECORDING_AFTER_TURN", "true")),
-        "",
-        "MOSHI_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("MOSHI_REALTIME_URL", ""))),
-        "MOSHI_MODEL=" + _env_value(os.getenv("MOSHI_MODEL", "moshi")),
-        "",
-        "PERSONAPLEX_REALTIME_URL=" + _env_value(_redacted_url(os.getenv("PERSONAPLEX_REALTIME_URL", ""))),
-        "PERSONAPLEX_MODEL=" + _env_value(os.getenv("PERSONAPLEX_MODEL", "personaplex")),
-    ]
-    return lines
-
-
-def _env_value(value: object) -> str:
-    text = str(value)
-    if text == "" or any(character.isspace() or character in {'"', "'", "#", "="} for character in text):
-        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return text
-
-
-def _redacted_url(value: str) -> str:
-    if not value:
-        return ""
-    try:
-        parsed = urlsplit(value)
-    except ValueError:
-        return value
-
-    netloc = parsed.netloc
-    if "@" in netloc:
-        netloc = f"***@{netloc.rsplit('@', 1)[1]}"
-
-    query = urlencode(
-        [
-            (key, "***" if any(secret in key.lower() for secret in ("key", "token", "secret", "password")) else val)
-            for key, val in parse_qsl(parsed.query, keep_blank_values=True)
-        ],
-        safe="*",
-    )
-    return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
-
-
 def _drain_queue(queue: asyncio.Queue[Any]) -> None:
     while True:
         try:
@@ -1216,38 +619,54 @@ def _default_provider(agent: str) -> str:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run automated Vox Symposium scenario evaluations.")
+    parser = argparse.ArgumentParser(
+        description="Run automated Vox Symposium scenario evaluations."
+    )
     parser.add_argument("scenario", help="Normalized scenario JSON path, or source dataset.")
     parser.add_argument("result", help="Output evaluation result JSON path.")
-    parser.add_argument("--id", dest="scenario_id", help="Select a scenario by id when scenario is a dataset.")
-    parser.add_argument("--index", dest="scenario_index", type=int, help="Select a scenario by zero-based index.")
+    parser.add_argument(
+        "--id", dest="scenario_id", help="Select a scenario by id when scenario is a dataset."
+    )
+    parser.add_argument(
+        "--index", dest="scenario_index", type=int, help="Select a scenario by zero-based index."
+    )
     parser.add_argument(
         "--start-index",
         type=int,
         default=0,
         help="Start a batch at this zero-based scenario index, e.g. 6 starts at case 7.",
     )
-    parser.add_argument("--limit", type=int, help="Run only the first N scenarios when scenario is a dataset.")
+    parser.add_argument(
+        "--limit", type=int, help="Run only the first N scenarios when scenario is a dataset."
+    )
     parser.add_argument("--audio-dir", help="Directory containing original speech wav files.")
-    parser.add_argument("--dialogue-turns", type=int, default=5, help="Scholar turns before evaluation.")
+    parser.add_argument(
+        "--dialogue-turns", type=int, default=5, help="Scholar turns before evaluation."
+    )
     parser.add_argument(
         "--question-audio",
         help="Evaluation question wav file. Overrides scenario evaluation.question_audio.",
     )
     parser.add_argument("--answer-audio", help="Where to save the evaluated scholar answer wav.")
-    parser.add_argument("--artifact-dir", help="Directory for dialogue logs and captured wav files.")
+    parser.add_argument(
+        "--artifact-dir", help="Directory for dialogue logs and captured wav files."
+    )
     parser.add_argument("--run-id", help="Stable run id for this evaluation.")
-    parser.add_argument("--frame-ms", type=int, default=20, help="Audio frame size used to stream wav files.")
+    parser.add_argument(
+        "--frame-ms", type=int, default=20, help="Audio frame size used to stream wav files."
+    )
     parser.add_argument(
         "--audio-speed",
         type=float,
-        default=float(os.getenv("EVALUATION_AUDIO_SPEED", "1.0")),
+        default=float_env("EVALUATION_AUDIO_SPEED", 1.0),
         help=(
             "Audio injection speed. 1.0 is realtime; higher values send audio faster and may "
             "affect streaming VAD/turn detection; 0 disables sleeps."
         ),
     )
-    parser.add_argument("--idle-timeout", type=float, default=1.5, help="Silence timeout used to end an utterance.")
+    parser.add_argument(
+        "--idle-timeout", type=float, default=1.5, help="Silence timeout used to end an utterance."
+    )
     parser.add_argument(
         "--max-utterance-seconds",
         type=float,
@@ -1297,10 +716,28 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _frame_sleep_seconds(frame_ms: int, audio_speed: float) -> float:
-    if audio_speed <= 0:
-        return 0
-    return (frame_ms / 1000) / audio_speed
+def _validate_args(args: argparse.Namespace) -> None:
+    minimums = {
+        "--start-index": (args.start_index, 0, True),
+        "--dialogue-turns": (args.dialogue_turns, 0, True),
+        "--frame-ms": (args.frame_ms, 0, False),
+        "--audio-speed": (args.audio_speed, 0, True),
+        "--idle-timeout": (args.idle_timeout, 0, False),
+        "--max-utterance-seconds": (args.max_utterance_seconds, 0, False),
+        "--text-idle-timeout": (args.text_idle_timeout, 0, True),
+        "--text-max-wait": (args.text_max_wait, 0, True),
+        "--case-retries": (args.case_retries, 1, True),
+        "--case-delay": (args.case_delay, 0, True),
+        "--case-retry-delay": (args.case_retry_delay, 0, True),
+    }
+    for option, (value, minimum, inclusive) in minimums.items():
+        is_valid = value >= minimum if inclusive else value > minimum
+        if not is_valid:
+            comparison = "at least" if inclusive else "greater than"
+            raise RuntimeError(f"{option} must be {comparison} {minimum}")
+
+    if args.limit is not None and args.limit < 1:
+        raise RuntimeError("--limit must be at least 1")
 
 
 if __name__ == "__main__":

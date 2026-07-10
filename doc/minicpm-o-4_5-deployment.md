@@ -298,7 +298,6 @@ curl --fail http://127.0.0.1:8006/status
 ```bash
 cd /path/to/Vox-Symposium
 python -m pip install -r requirements.txt
-python -m pip install -e .
 ```
 
 `.env` 範例，先只讓 Scholar 使用 MiniCPM；Citizen 使用 Gemini：

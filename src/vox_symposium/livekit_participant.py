@@ -12,12 +12,15 @@ from typing import Any
 
 from livekit import api, rtc
 
-from vox_symposium.audio import PcmAudio, normalize_audio, rechunk_pcm16
+from vox_symposium.audio import (
+    PcmAudio,
+    concatenate_pcm_audio,
+    normalize_audio,
+    rechunk_pcm16,
+)
 from vox_symposium.config import AgentConfig, Settings
-from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.models.factory import build_model_from_settings
 from vox_symposium.recording import ConversationRecorder, audio_event_fields, write_wav
-
 
 logger = logging.getLogger(__name__)
 RECORDING_TURN_IDLE_SECONDS = 1.0
@@ -43,13 +46,13 @@ class ProgrammableParticipant:
         self.agent = agent
         self.route = PeerRoute(agent.identity, remote_identity)
         self.room = rtc.Room()
-        self.model = build_model(settings, agent)
+        self.model = build_model_from_settings(settings, agent)
         self.source = rtc.AudioSource(settings.publish_sample_rate, 1)
         self.recorder = recorder
         self.recording_dir = recording_dir
         self._recording_turn_index = 0
         self._recording_text_parts: list[str] = []
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task[None]] = set()
         self._closed = asyncio.Event()
 
     async def run(self) -> None:
@@ -95,7 +98,9 @@ class ProgrammableParticipant:
         )
 
     async def _publish_model_track(self) -> None:
-        track = rtc.LocalAudioTrack.create_audio_track(f"{self.agent.identity}-model-audio", self.source)
+        track = rtc.LocalAudioTrack.create_audio_track(
+            f"{self.agent.identity}-model-audio", self.source
+        )
         options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
         await self.room.local_participant.publish_track(track, options)
 
@@ -217,7 +222,9 @@ class ProgrammableParticipant:
             channels=audio.channels,
         )
         samples_per_frame = int(self.settings.publish_sample_rate * self.settings.frame_ms / 1000)
-        for chunk in rechunk_pcm16(pcm48, self.settings.publish_sample_rate, self.settings.frame_ms):
+        for chunk in rechunk_pcm16(
+            pcm48, self.settings.publish_sample_rate, self.settings.frame_ms
+        ):
             frame = rtc.AudioFrame.create(
                 self.settings.publish_sample_rate,
                 1,
@@ -241,9 +248,14 @@ class ProgrammableParticipant:
         if not chunks or self.recorder is None or self.recording_dir is None:
             return
 
-        first = chunks[0]
-        data = b"".join(chunk.data for chunk in chunks)
-        audio = PcmAudio(data=data, sample_rate=first.sample_rate, channels=first.channels)
+        try:
+            audio = concatenate_pcm_audio(chunks)
+        except ValueError:
+            logger.error(
+                "%s changed audio format during a recorded turn",
+                self.agent.identity,
+            )
+            return
         self._recording_turn_index += 1
         path = self.recording_dir / f"{self.agent.identity}-{self._recording_turn_index:04d}.wav"
         recording = write_wav(path, audio)
@@ -277,7 +289,3 @@ class ProgrammableParticipant:
         text = "".join(self._recording_text_parts).strip()
         self._recording_text_parts.clear()
         return text
-
-
-def build_model(settings: Settings, agent: AgentConfig) -> RealtimeAudioModel:
-    return build_model_from_settings(settings, agent)

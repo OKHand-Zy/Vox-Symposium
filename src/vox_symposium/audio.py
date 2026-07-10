@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import sys
 from array import array
+from collections.abc import Iterable
 from dataclasses import dataclass
-
 
 PCM_SAMPLE_WIDTH_BYTES = 2
 
@@ -13,6 +13,31 @@ class PcmAudio:
     data: bytes
     sample_rate: int
     channels: int = 1
+
+    @property
+    def duration_seconds(self) -> float:
+        bytes_per_second = self.sample_rate * self.channels * PCM_SAMPLE_WIDTH_BYTES
+        return len(self.data) / bytes_per_second if bytes_per_second > 0 else 0.0
+
+
+def concatenate_pcm_audio(chunks: Iterable[PcmAudio]) -> PcmAudio:
+    """Join compatible PCM chunks and reject accidental format changes."""
+    iterator = iter(chunks)
+    try:
+        first = next(iterator)
+    except StopIteration as exc:
+        raise ValueError("at least one PCM audio chunk is required") from exc
+
+    data = bytearray(first.data)
+    for chunk in iterator:
+        if (chunk.sample_rate, chunk.channels) != (first.sample_rate, first.channels):
+            raise ValueError("PCM audio chunks must use the same sample rate and channel count")
+        data.extend(chunk.data)
+    return PcmAudio(
+        data=bytes(data),
+        sample_rate=first.sample_rate,
+        channels=first.channels,
+    )
 
 
 def ensure_mono_pcm16(data: bytes, channels: int) -> bytes:
@@ -54,8 +79,16 @@ def resample_pcm16_mono(data: bytes, from_rate: int, to_rate: int) -> bytes:
     return _array_to_le_bytes(dst)
 
 
-def rechunk_pcm16(data: bytes, sample_rate: int, frame_ms: int) -> list[bytes]:
-    frame_bytes = int(sample_rate * frame_ms / 1000) * PCM_SAMPLE_WIDTH_BYTES
+def rechunk_pcm16(
+    data: bytes,
+    sample_rate: int,
+    frame_ms: int,
+    *,
+    channels: int = 1,
+) -> list[bytes]:
+    if channels < 1:
+        raise ValueError(f"channels must be >= 1, got {channels}")
+    frame_bytes = int(sample_rate * frame_ms / 1000) * PCM_SAMPLE_WIDTH_BYTES * channels
     if frame_bytes <= 0:
         raise ValueError("frame size must be positive")
 

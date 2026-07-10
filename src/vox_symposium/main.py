@@ -5,7 +5,7 @@ import asyncio
 import contextlib
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from vox_symposium.config import load_settings
@@ -13,7 +13,9 @@ from vox_symposium.recording import ConversationRecorder
 
 
 async def run() -> None:
-    parser = argparse.ArgumentParser(description="Run programmable LiveKit realtime audio participants.")
+    parser = argparse.ArgumentParser(
+        description="Run programmable LiveKit realtime audio participants."
+    )
     parser.add_argument(
         "--participant",
         choices=["agent-citizen", "agent-scholar", "both"],
@@ -77,11 +79,12 @@ async def run() -> None:
             )
         )
 
-    tasks = [asyncio.create_task(participant.run(), name=participant.agent.identity) for participant in participants]
+    tasks = [
+        asyncio.create_task(participant.run(), name=participant.agent.identity)
+        for participant in participants
+    ]
     try:
         await asyncio.gather(*tasks)
-    except KeyboardInterrupt:
-        pass
     finally:
         for participant in participants:
             await participant.close()
@@ -101,7 +104,7 @@ def main() -> None:
 
 
 def _recording_run_id(room: str, participant: str) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     safe_room = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in room)
     return f"{stamp}-{safe_room}-{participant}"
 

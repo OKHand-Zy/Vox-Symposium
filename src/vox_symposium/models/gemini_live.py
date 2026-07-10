@@ -10,7 +10,7 @@ from google.oauth2 import service_account
 
 from vox_symposium.audio import PcmAudio, normalize_audio
 from vox_symposium.config import gemini_uses_thinking_level
-from vox_symposium.models.base import QueueBackedRealtimeAudioModel
+from vox_symposium.models.base import QueueBackedRealtimeAudioModel, cancel_task
 
 VERTEX_AI_SCOPES = ("https://www.googleapis.com/auth/cloud-platform",)
 
@@ -98,11 +98,7 @@ class GeminiLiveModel(QueueBackedRealtimeAudioModel):
             config.realtime_input_config = types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(disabled=True),
                 activity_handling="NO_INTERRUPTION",
-                **(
-                    {"turn_coverage": "TURN_INCLUDES_ALL_INPUT"}
-                    if not uses_thinking_level
-                    else {}
-                ),
+                **({"turn_coverage": "TURN_INCLUDES_ALL_INPUT"} if not uses_thinking_level else {}),
             )
         self._session_cm = self._client.aio.live.connect(model=self.model, config=config)
         self._session = await self._session_cm.__aenter__()
@@ -111,7 +107,9 @@ class GeminiLiveModel(QueueBackedRealtimeAudioModel):
                 turns=list(self.initial_history),
                 turn_complete=True,
             )
-        self._reader_task = asyncio.create_task(self._read_loop(), name=f"gemini-{self.model}-reader")
+        self._reader_task = asyncio.create_task(
+            self._read_loop(), name=f"gemini-{self.model}-reader"
+        )
 
     def _client_http_options(self) -> dict[str, types.HttpOptions]:
         if not self.enable_affective_dialog:
@@ -146,10 +144,14 @@ class GeminiLiveModel(QueueBackedRealtimeAudioModel):
             await self._session.send_realtime_input(activity_end=types.ActivityEnd())
 
     async def close(self) -> None:
-        if self._reader_task:
-            self._reader_task.cancel()
-        if self._session_cm is not None:
-            await self._session_cm.__aexit__(None, None, None)
+        reader_task = self._reader_task
+        self._reader_task = None
+        await cancel_task(reader_task)
+        session_cm = self._session_cm
+        self._session_cm = None
+        self._session = None
+        if session_cm is not None:
+            await session_cm.__aexit__(None, None, None)
         self.close_output_streams()
 
     async def _read_loop(self) -> None:

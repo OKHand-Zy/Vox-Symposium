@@ -16,7 +16,6 @@ from vox_symposium.audio import (
 )
 from vox_symposium.models.base import QueueBackedRealtimeAudioModel
 
-
 logger = logging.getLogger(__name__)
 
 EVALUATION_TURN_TAKING_POLICY = """Full-duplex speaking policy:
@@ -72,9 +71,7 @@ class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
         self.evaluation_turn_taking = evaluation_turn_taking
         self.system_prompt = instructions.rstrip()
         if evaluation_turn_taking:
-            self.system_prompt = (
-                f"{self.system_prompt}\n\n{EVALUATION_TURN_TAKING_POLICY}"
-            )
+            self.system_prompt = f"{self.system_prompt}\n\n{EVALUATION_TURN_TAKING_POLICY}"
         self._input_chunk_bytes = int(self.input_sample_rate * input_chunk_ms / 1_000) * 4
         self._input_buffer = bytearray()
         self._ws: ClientConnection | None = None
@@ -180,7 +177,10 @@ class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
                 self._reader_task.cancel()
                 await asyncio.gather(self._reader_task, return_exceptions=True)
             except Exception:
-                pass
+                logger.debug(
+                    "MiniCPM reader did not close cleanly",
+                    exc_info=True,
+                )
         await ws.close()
         self._ws = None
         self._session_created = False
@@ -198,8 +198,7 @@ class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
             if event_type == "session.closed":
                 reason = event.get("reason") or "unknown"
                 raise RuntimeError(
-                    f"MiniCPM session closed before {expected_type}: reason={reason}; "
-                    f"event={event}"
+                    f"MiniCPM session closed before {expected_type}: reason={reason}; event={event}"
                 )
             if event_type == expected_type:
                 return event

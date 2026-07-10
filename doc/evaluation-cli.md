@@ -78,6 +78,8 @@ vox-symposium-evaluate SCENARIO RESULT [options]
 
 `--case-delay` 與 `--case-retry-delay` 是不同用途：前者是成功 case 到下一個 case 中間等待；後者是同一 case 失敗後 retry 前等待。
 
+CLI 會在建立 provider 連線前驗證數值：frame duration、utterance timeout 必須大於 0；index、turn count、audio speed、文字 timeout 與 delay 不可小於 0；`--case-retries` 與 `--limit` 至少為 1。錯誤會直接指出對應參數。
+
 使用 `--overnight` 時，第 3 次仍失敗不會退出。runner 會先完成該 attempt 的斷線、刪除 case artifact 子資料夾等清理流程，再把該 case 以 `status: "failed"` 和 error message 寫入 result / summary，然後繼續下一個 case。
 
 ## 常用範例

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
 import wave
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from vox_symposium.audio import PcmAudio
+from vox_symposium.json_io import write_json
 
 
 @dataclass(frozen=True)
@@ -49,10 +49,7 @@ class ConversationRecorder:
         self.write()
 
     def write(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as file:
-            json.dump(self.payload, file, ensure_ascii=False, indent=2)
-            file.write("\n")
+        write_json(self.path, self.payload)
 
 
 def write_wav(path: str | Path, audio: PcmAudio) -> RecordedAudio:
@@ -64,13 +61,11 @@ def write_wav(path: str | Path, audio: PcmAudio) -> RecordedAudio:
         wav.setframerate(audio.sample_rate)
         wav.writeframes(audio.data)
 
-    bytes_per_second = audio.sample_rate * audio.channels * 2
-    duration = len(audio.data) / bytes_per_second if bytes_per_second else 0.0
     return RecordedAudio(
         path=output_path,
         sample_rate=audio.sample_rate,
         channels=audio.channels,
-        duration_seconds=duration,
+        duration_seconds=audio.duration_seconds,
     )
 
 
@@ -84,4 +79,4 @@ def audio_event_fields(recording: RecordedAudio) -> dict[str, Any]:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")

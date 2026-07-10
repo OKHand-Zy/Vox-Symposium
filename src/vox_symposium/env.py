@@ -4,6 +4,15 @@ import os
 from collections.abc import Iterable
 
 
+def load_environment() -> bool:
+    """Load a local ``.env`` file when python-dotenv is installed."""
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return False
+    return load_dotenv()
+
+
 def env_with_legacy(primary: str, legacy: str, *, default: str) -> str:
     return os.getenv(primary) or os.getenv(legacy) or default
 

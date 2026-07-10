@@ -22,6 +22,16 @@ Agent-Citizen model output -> Agent-Citizen LiveKit audio track -> Agent-Scholar
 Agent-Scholar model output -> Agent-Scholar LiveKit audio track -> Agent-Citizen model input
 ```
 
+## 文件導覽
+
+- [Evaluation CLI 完整參數](doc/evaluation-cli.md)
+- [專案架構與模組責任](doc/architecture.md)
+- [開發、測試與維護規則](doc/development.md)
+- [Self-hosted full-duplex provider 串接](doc/self-hosted-full-duplex-gateways.md)
+- [MiniCPM-o 4.5 部署](doc/minicpm-o-4_5-deployment.md)
+- [Freeze-Omni 文字事件與 VAD patch](doc/freeze-omni-text-events.md)
+- [PersonaPlex live server](doc/personaplex-live-server.md)
+
 ## 角色定義
 
 - Agent-Citizen：代表人類使用者，用來模擬一般人對 Voice Agent 的提問、追問與互動。
@@ -71,7 +81,6 @@ data/
 ```bash
 conda activate vox-symposium
 pip install -r requirements.txt
-pip install -e .
 ```
 
 `.env` 範例，兩邊都使用 Gemini：
@@ -324,7 +333,6 @@ vox-symposium-scenario save-result \
 conda create -n vox-symposium python=3.11
 conda activate vox-symposium
 pip install -r requirements.txt
-pip install -e .
 ```
 
 ## 設定
@@ -542,14 +550,27 @@ vox-symposium --participant agent-citizen
 vox-symposium --participant agent-scholar
 ```
 
-## 測試執行
+## 開發檢查
+
+安裝開發工具並執行不需 API key 的單元測試與靜態檢查：
+
+```bash
+pip install -e '.[dev]'
+python -m unittest discover -s tests -v
+ruff check src tests
+ruff format --check src tests
+pyright
+```
+
+完整規範見 [doc/development.md](doc/development.md)。
+
+## LiveKit 整合測試
 
 先確認 conda 環境已啟用，並且已安裝依賴：
 
 ```bash
 conda activate vox-symposium
 pip install -r requirements.txt
-pip install -e .
 ```
 
 建立 `.env`，至少填入 LiveKit 設定：
@@ -658,6 +679,8 @@ LIVEKIT_ROOM=test-room
 ## 擴充其他模型
 
 Provider adapter 放在 `src/vox_symposium/models/`，provider 名稱與 factory 集中在 `src/vox_symposium/providers.py` 與 `src/vox_symposium/models/factory.py`。之後如果要改接 self-hosted full-duplex model，新增專用 adapter，再在 factory 中註冊。
+
+目前的模組邊界、設定生命週期與新增 provider 清單見 [doc/architecture.md](doc/architecture.md)。
 
 如果要使用自己的本地 Hugging Face 即時語音模型，請看 [doc/local-hf-realtime-model.md](doc/local-hf-realtime-model.md)。
 

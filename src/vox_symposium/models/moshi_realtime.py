@@ -8,8 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from websockets.asyncio.client import ClientConnection, connect
 
 from vox_symposium.audio import PcmAudio, float32_to_pcm16, normalize_audio
-from vox_symposium.models.base import QueueBackedRealtimeAudioModel
-
+from vox_symposium.models.base import QueueBackedRealtimeAudioModel, cancel_task
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +65,13 @@ class MoshiRealtimeModel(QueueBackedRealtimeAudioModel):
             await self._send_audio_page(opus)
 
     async def close(self) -> None:
-        if self._reader_task:
-            self._reader_task.cancel()
-        if self._ws:
-            await self._ws.close()
+        reader_task = self._reader_task
+        self._reader_task = None
+        await cancel_task(reader_task)
+        ws = self._ws
+        self._ws = None
+        if ws:
+            await ws.close()
         self.close_output_streams()
 
     def _load_dependencies(self) -> None:
@@ -139,10 +141,7 @@ class MoshiRealtimeModel(QueueBackedRealtimeAudioModel):
             if text:
                 await self._text_out.put(text)
         elif kind == 5:
-            raise RuntimeError(
-                "Moshi realtime error: "
-                f"{payload.decode('utf-8', errors='replace')}"
-            )
+            raise RuntimeError(f"Moshi realtime error: {payload.decode('utf-8', errors='replace')}")
 
     def _pcm16_to_float32(self, pcm: bytes):
         samples = self._np.frombuffer(pcm, dtype="<i2").astype(self._np.float32)

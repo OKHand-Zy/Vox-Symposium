@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-import os
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from vox_symposium.config import (
-    gemini_live_model,
-    gemini_live_initial_history,
-    gemini_thinking_level,
-    gemini_thinking_budget,
+    FreezeOmniSettings,
+    GeminiSettings,
+    MiniCPMSettings,
+    MoshiSettings,
+    OpenAISettings,
     gemini_uses_thinking_level,
-    load_gemini_auth,
+    load_freeze_omni_settings,
+    load_gemini_settings,
+    load_minicpm_settings,
     load_moshi_settings,
-    load_openai_auth,
+    load_openai_settings,
 )
-from vox_symposium.env import bool_env, float_env, int_env, optional_float_env, required_env
 from vox_symposium.models.base import RealtimeAudioModel
 from vox_symposium.providers import (
     MOSHI_PROTOCOL_PROVIDERS,
@@ -24,6 +25,8 @@ from vox_symposium.providers import (
 if TYPE_CHECKING:
     from vox_symposium.config import AgentConfig, Settings
 
+T = TypeVar("T")
+
 
 def build_model_from_settings(
     settings: Settings,
@@ -33,109 +36,42 @@ def build_model_from_settings(
 ) -> RealtimeAudioModel:
     provider = normalize_provider(agent.provider)
     if provider == "openai":
-        if settings.openai_api_key is None:
-            raise RuntimeError(
-                "OpenAI credentials are required when a participant uses provider=openai"
-            )
-        from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
-
-        return OpenAIRealtimeModel(
-            api_key=settings.openai_api_key,
-            backend=settings.openai_backend,
-            endpoint=settings.openai_endpoint,
-            api_version=settings.openai_api_version,
-            model=settings.openai_model,
-            voice=settings.openai_voice,
-            reasoning_effort=settings.openai_reasoning_effort,
-            ping_interval=settings.openai_ping_interval,
-            ping_timeout=settings.openai_ping_timeout,
-            instructions=agent.instructions,
-            manual_activity=evaluation_mode,
+        config = _require_config(settings.openai, provider, agent.identity)
+        return _build_openai_model(
+            config,
+            agent.instructions,
+            evaluation_mode=evaluation_mode,
         )
-
     if provider == "gemini":
-        from vox_symposium.models.gemini_live import GeminiLiveModel
-
-        return GeminiLiveModel(
-            api_key=settings.gemini_api_key,
-            backend=settings.gemini_backend,
-            vertex_project=settings.gemini_vertex_project,
-            vertex_location=settings.gemini_vertex_location,
-            credentials_file=settings.gemini_credentials_file,
-            model=settings.gemini_model,
-            instructions=agent.instructions,
-            thinking_level=settings.gemini_thinking_level,
-            thinking_budget=settings.gemini_thinking_budget,
-            enable_affective_dialog=settings.gemini_enable_affective_dialog,
-            initial_history=(
-                (agent.initial_history or settings.gemini_initial_history)
-                if gemini_uses_thinking_level(settings.gemini_model)
-                else ()
-            ),
-            manual_activity=evaluation_mode,
+        config = _require_config(settings.gemini, provider, agent.identity)
+        return _build_gemini_model(
+            config,
+            agent.instructions,
+            initial_history=agent.initial_history,
+            evaluation_mode=evaluation_mode,
         )
-
     if provider == "minicpm":
-        if settings.minicpm_realtime_url is None:
-            raise RuntimeError(
-                "MINICPM_REALTIME_URL is required when a participant uses provider=minicpm"
-            )
-        from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
-
-        return MiniCPMRealtimeModel(
-            url=settings.minicpm_realtime_url,
-            api_key=settings.minicpm_api_key,
-            instructions=agent.instructions,
-            length_penalty=settings.minicpm_length_penalty,
-            input_chunk_ms=settings.minicpm_input_chunk_ms,
-            queue_timeout=settings.minicpm_queue_timeout,
-            ping_interval=settings.minicpm_ping_interval,
-            ping_timeout=settings.minicpm_ping_timeout,
-            evaluation_turn_taking=evaluation_mode,
+        config = _require_config(settings.minicpm, provider, agent.identity)
+        return _build_minicpm_model(
+            config,
+            agent.instructions,
+            evaluation_mode=evaluation_mode,
         )
-
     if provider == "freeze_omni":
-        if settings.freeze_omni_realtime_url is None:
-            raise RuntimeError(
-                "FREEZE_OMNI_REALTIME_URL is required when a participant uses provider=freeze_omni"
-            )
-        from vox_symposium.models.freeze_omni import FreezeOmniRealtimeModel
-
-        return FreezeOmniRealtimeModel(
-            url=settings.freeze_omni_realtime_url,
-            instructions=agent.instructions,
-            ssl_verify=settings.freeze_omni_ssl_verify,
-            input_chunk_ms=settings.freeze_omni_input_chunk_ms,
-            connect_timeout=settings.freeze_omni_connect_timeout,
-            connect_retries=settings.freeze_omni_connect_retries,
-            connect_retry_delay=settings.freeze_omni_connect_retry_delay,
-            prompt_timeout=settings.freeze_omni_prompt_timeout,
-            turn_start_delay=settings.freeze_omni_turn_start_delay,
-            turn_preroll_silence_ms=settings.freeze_omni_turn_preroll_silence_ms,
-            max_input_silence_ms=settings.freeze_omni_max_input_silence_ms,
-            input_silence_rms_threshold=settings.freeze_omni_input_silence_rms_threshold,
-            post_turn_poll_seconds=settings.freeze_omni_post_turn_poll_seconds,
-            post_turn_idle_seconds=settings.freeze_omni_post_turn_idle_seconds,
-            post_turn_poll_chunk_ms=settings.freeze_omni_post_turn_poll_chunk_ms,
-            stop_recording_after_turn=settings.freeze_omni_stop_recording_after_turn,
-            evaluation_turn_taking=evaluation_mode,
+        config = _require_config(settings.freeze_omni, provider, agent.identity)
+        return _build_freeze_omni_model(
+            config,
+            agent.instructions,
+            evaluation_mode=evaluation_mode,
         )
-
     if provider in MOSHI_PROTOCOL_PROVIDERS:
-        if provider not in settings.moshi_protocols:
+        config = settings.moshi_protocols.get(provider)
+        if config is None:
             raise RuntimeError(
-                f"{provider_label(provider)} realtime URL is required when a participant uses "
-                f"provider={provider}"
+                f"{provider_label(provider)} realtime URL is required when a "
+                f"participant uses provider={provider}"
             )
-        from vox_symposium.models.moshi_realtime import MoshiRealtimeModel
-
-        protocol_settings = settings.moshi_protocols[provider]
-        return MoshiRealtimeModel(
-            url=protocol_settings.url,
-            api_key=protocol_settings.api_key,
-            text_prompt=agent.instructions,
-        )
-
+        return _build_moshi_model(config, agent.instructions)
     raise RuntimeError(f"Unsupported provider for {agent.identity}: {agent.provider}")
 
 
@@ -148,109 +84,159 @@ def build_model_from_env(
 ) -> RealtimeAudioModel:
     provider = normalize_provider(provider)
     if provider == "openai":
-        from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
-
-        auth = load_openai_auth()
-        return OpenAIRealtimeModel(
-            api_key=auth.api_key,
-            backend=auth.backend,
-            endpoint=auth.endpoint,
-            api_version=auth.api_version,
-            model=auth.model,
-            voice=os.getenv("OPENAI_REALTIME_VOICE", "marin"),
-            reasoning_effort=os.getenv("OPENAI_REALTIME_REASONING_EFFORT") or None,
-            ping_interval=float_env("OPENAI_REALTIME_PING_INTERVAL", 20.0),
-            ping_timeout=float_env("OPENAI_REALTIME_PING_TIMEOUT", 20.0),
-            instructions=instructions,
-            manual_activity=evaluation_mode,
+        return _build_openai_model(
+            load_openai_settings(),
+            instructions,
+            evaluation_mode=evaluation_mode,
         )
-
     if provider == "gemini":
-        from vox_symposium.models.gemini_live import GeminiLiveModel
-
-        auth = load_gemini_auth()
-        model = gemini_live_model(auth.backend)
-        uses_thinking_level = gemini_uses_thinking_level(model)
-        gemini_initial_history = (
-            (initial_history or gemini_live_initial_history()) if uses_thinking_level else ()
+        return _build_gemini_model(
+            load_gemini_settings(),
+            instructions,
+            initial_history=initial_history,
+            evaluation_mode=evaluation_mode,
         )
-        return GeminiLiveModel(
-            api_key=auth.api_key,
-            backend=auth.backend,
-            vertex_project=auth.project,
-            vertex_location=auth.location,
-            credentials_file=auth.credentials_file,
-            model=model,
-            instructions=instructions,
-            thinking_level=gemini_thinking_level() if uses_thinking_level else "minimal",
-            thinking_budget=None if uses_thinking_level else gemini_thinking_budget(),
-            enable_affective_dialog=bool_env("GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG", False),
-            initial_history=gemini_initial_history if uses_thinking_level else (),
-            manual_activity=evaluation_mode,
-        )
-
     if provider == "minicpm":
-        from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
-
-        return MiniCPMRealtimeModel(
-            url=required_env("MINICPM_REALTIME_URL"),
-            api_key=os.getenv("MINICPM_API_KEY") or None,
-            instructions=instructions,
-            length_penalty=float_env("MINICPM_LENGTH_PENALTY", 1.1),
-            input_chunk_ms=int_env("MINICPM_INPUT_CHUNK_MS", 1_000),
-            queue_timeout=float_env("MINICPM_QUEUE_TIMEOUT", 300.0),
-            ping_interval=optional_float_env("MINICPM_PING_INTERVAL", 30.0),
-            ping_timeout=optional_float_env("MINICPM_PING_TIMEOUT", 120.0),
-            evaluation_turn_taking=evaluation_mode,
+        return _build_minicpm_model(
+            load_minicpm_settings(),
+            instructions,
+            evaluation_mode=evaluation_mode,
         )
-
     if provider == "freeze_omni":
-        from vox_symposium.models.freeze_omni import FreezeOmniRealtimeModel
-
-        return FreezeOmniRealtimeModel(
-            url=required_env("FREEZE_OMNI_REALTIME_URL"),
-            instructions=instructions,
-            ssl_verify=bool_env("FREEZE_OMNI_SSL_VERIFY", False),
-            input_chunk_ms=int_env("FREEZE_OMNI_INPUT_CHUNK_MS", 20),
-            connect_timeout=float_env("FREEZE_OMNI_CONNECT_TIMEOUT", 60.0),
-            connect_retries=int_env("FREEZE_OMNI_CONNECT_RETRIES", 10),
-            connect_retry_delay=float_env("FREEZE_OMNI_CONNECT_RETRY_DELAY", 5.0),
-            prompt_timeout=float_env("FREEZE_OMNI_PROMPT_TIMEOUT", 60.0),
-            turn_start_delay=float_env("FREEZE_OMNI_TURN_START_DELAY", 3.0),
-            turn_preroll_silence_ms=int_env("FREEZE_OMNI_TURN_PREROLL_SILENCE_MS", 1200),
-            max_input_silence_ms=int_env("FREEZE_OMNI_MAX_INPUT_SILENCE_MS", 200),
-            input_silence_rms_threshold=float_env(
-                "FREEZE_OMNI_INPUT_SILENCE_RMS_THRESHOLD",
-                800.0,
-            ),
-            post_turn_poll_seconds=float_env(
-                "FREEZE_OMNI_POST_TURN_POLL_SECONDS",
-                60.0,
-            ),
-            post_turn_idle_seconds=float_env(
-                "FREEZE_OMNI_POST_TURN_IDLE_SECONDS",
-                3.0,
-            ),
-            post_turn_poll_chunk_ms=int_env("FREEZE_OMNI_POST_TURN_POLL_CHUNK_MS", 160),
-            stop_recording_after_turn=bool_env(
-                "FREEZE_OMNI_STOP_RECORDING_AFTER_TURN",
-                True,
-            ),
-            evaluation_turn_taking=evaluation_mode,
+        return _build_freeze_omni_model(
+            load_freeze_omni_settings(),
+            instructions,
+            evaluation_mode=evaluation_mode,
         )
-
     if provider in MOSHI_PROTOCOL_PROVIDERS:
-        from vox_symposium.models.moshi_realtime import MoshiRealtimeModel
-
-        settings = load_moshi_settings(provider, required=True)
-        if settings is None:
+        config = load_moshi_settings(provider, required=True)
+        if config is None:
             raise RuntimeError(
                 f"{provider_label(provider)} realtime URL is required when provider={provider}"
             )
-        return MoshiRealtimeModel(
-            url=settings.url,
-            api_key=settings.api_key,
-            text_prompt=instructions,
-        )
-
+        return _build_moshi_model(config, instructions)
     raise RuntimeError(f"Unsupported provider: {provider}")
+
+
+def _build_openai_model(
+    config: OpenAISettings,
+    instructions: str,
+    *,
+    evaluation_mode: bool,
+) -> RealtimeAudioModel:
+    from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
+
+    return OpenAIRealtimeModel(
+        api_key=config.auth.api_key,
+        backend=config.auth.backend,
+        endpoint=config.auth.endpoint,
+        api_version=config.auth.api_version,
+        model=config.auth.model,
+        voice=config.voice,
+        reasoning_effort=config.reasoning_effort,
+        ping_interval=config.ping_interval,
+        ping_timeout=config.ping_timeout,
+        instructions=instructions,
+        manual_activity=evaluation_mode,
+    )
+
+
+def _build_gemini_model(
+    config: GeminiSettings,
+    instructions: str,
+    *,
+    initial_history: tuple[dict[str, Any], ...],
+    evaluation_mode: bool,
+) -> RealtimeAudioModel:
+    from vox_symposium.models.gemini_live import GeminiLiveModel
+
+    history: tuple[dict[str, Any], ...] = ()
+    if gemini_uses_thinking_level(config.model):
+        history = initial_history or config.initial_history
+    return GeminiLiveModel(
+        api_key=config.auth.api_key,
+        backend=config.auth.backend,
+        vertex_project=config.auth.project,
+        vertex_location=config.auth.location,
+        credentials_file=config.auth.credentials_file,
+        model=config.model,
+        instructions=instructions,
+        thinking_level=config.thinking_level,
+        thinking_budget=config.thinking_budget,
+        enable_affective_dialog=config.enable_affective_dialog,
+        initial_history=history,
+        manual_activity=evaluation_mode,
+    )
+
+
+def _build_minicpm_model(
+    config: MiniCPMSettings,
+    instructions: str,
+    *,
+    evaluation_mode: bool,
+) -> RealtimeAudioModel:
+    from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
+
+    return MiniCPMRealtimeModel(
+        url=config.url,
+        api_key=config.api_key,
+        instructions=instructions,
+        length_penalty=config.length_penalty,
+        input_chunk_ms=config.input_chunk_ms,
+        queue_timeout=config.queue_timeout,
+        ping_interval=config.ping_interval,
+        ping_timeout=config.ping_timeout,
+        evaluation_turn_taking=evaluation_mode,
+    )
+
+
+def _build_freeze_omni_model(
+    config: FreezeOmniSettings,
+    instructions: str,
+    *,
+    evaluation_mode: bool,
+) -> RealtimeAudioModel:
+    from vox_symposium.models.freeze_omni import FreezeOmniRealtimeModel
+
+    return FreezeOmniRealtimeModel(
+        url=config.url,
+        instructions=instructions,
+        ssl_verify=config.ssl_verify,
+        input_chunk_ms=config.input_chunk_ms,
+        connect_timeout=config.connect_timeout,
+        connect_retries=config.connect_retries,
+        connect_retry_delay=config.connect_retry_delay,
+        prompt_timeout=config.prompt_timeout,
+        turn_start_delay=config.turn_start_delay,
+        turn_preroll_silence_ms=config.turn_preroll_silence_ms,
+        max_input_silence_ms=config.max_input_silence_ms,
+        input_silence_rms_threshold=config.input_silence_rms_threshold,
+        post_turn_poll_seconds=config.post_turn_poll_seconds,
+        post_turn_idle_seconds=config.post_turn_idle_seconds,
+        post_turn_poll_chunk_ms=config.post_turn_poll_chunk_ms,
+        stop_recording_after_turn=config.stop_recording_after_turn,
+        evaluation_turn_taking=evaluation_mode,
+    )
+
+
+def _build_moshi_model(
+    config: MoshiSettings,
+    instructions: str,
+) -> RealtimeAudioModel:
+    from vox_symposium.models.moshi_realtime import MoshiRealtimeModel
+
+    return MoshiRealtimeModel(
+        url=config.url,
+        api_key=config.api_key,
+        text_prompt=instructions,
+    )
+
+
+def _require_config(
+    config: T | None,
+    provider: str,
+    identity: str,
+) -> T:
+    if config is None:
+        raise RuntimeError(f"{provider_label(provider)} configuration is required for {identity}")
+    return config

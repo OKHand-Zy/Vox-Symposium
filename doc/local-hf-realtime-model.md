@@ -76,13 +76,12 @@ src/vox_symposium/models/local_hf_realtime.py
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 
 from vox_symposium.audio import PcmAudio, normalize_audio
-from vox_symposium.models.base import RealtimeAudioModel
+from vox_symposium.models.base import QueueBackedRealtimeAudioModel, cancel_task
 
 
-class LocalHFRealtimeModel(RealtimeAudioModel):
+class LocalHFRealtimeModel(QueueBackedRealtimeAudioModel):
     input_sample_rate = 16_000
     output_sample_rate = 24_000
 
@@ -93,11 +92,11 @@ class LocalHFRealtimeModel(RealtimeAudioModel):
         instructions: str,
         device: str = "cuda",
     ) -> None:
+        super().__init__()
         self.model_path = model_path
         self.instructions = instructions
         self.device = device
         self._audio_in: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=100)
-        self._audio_out: asyncio.Queue[PcmAudio | None] = asyncio.Queue(maxsize=100)
         self._worker_task: asyncio.Task[None] | None = None
         self._model = None
 
@@ -118,18 +117,11 @@ class LocalHFRealtimeModel(RealtimeAudioModel):
         if pcm:
             await self._audio_in.put(pcm)
 
-    async def receive_audio(self) -> AsyncIterator[PcmAudio]:
-        while True:
-            item = await self._audio_out.get()
-            if item is None:
-                return
-            yield item
-
     async def close(self) -> None:
-        if self._worker_task:
-            self._worker_task.cancel()
-        await self._audio_in.put(None)
-        await self._audio_out.put(None)
+        worker_task = self._worker_task
+        self._worker_task = None
+        await cancel_task(worker_task)
+        self.close_output_streams()
 
     async def _run_model_loop(self) -> None:
         # 這裡要換成你的模型實際 streaming 推論邏輯。
@@ -156,7 +148,7 @@ class LocalHFRealtimeModel(RealtimeAudioModel):
                 #         )
                 #     )
         finally:
-            await self._audio_out.put(None)
+            self.close_output_streams()
 ```
 
 這個範本只定義接線方式，不能直接產生模型音訊。你需要把 `connect()` 和 `_run_model_loop()` 裡的 pseudo code 換成自己的 Hugging Face 模型呼叫方式。
@@ -165,40 +157,51 @@ class LocalHFRealtimeModel(RealtimeAudioModel):
 
 修改 `src/vox_symposium/config.py`。
 
-`Settings` 加上本地 HF 設定：
+新增型別化設定與 loader：
 
 ```python
-local_hf_model_path: str | None
-local_hf_device: str
+@dataclass(frozen=True)
+class LocalHFSettings:
+    model_path: str
+    device: str
+
+
+def load_local_hf_settings() -> LocalHFSettings:
+    return LocalHFSettings(
+        model_path=required_env("LOCAL_HF_MODEL_PATH"),
+        device=os.getenv("LOCAL_HF_DEVICE", "cuda"),
+    )
 ```
 
-`load_settings()` 裡加上：
+在 `Settings` 新增 `local_hf: LocalHFSettings | None`，並在 `load_settings()` 建立它：
 
 ```python
-local_hf_model_path=(
-    _required("LOCAL_HF_MODEL_PATH")
-    if _uses_provider("local_hf", agent_citizen, agent_scholar)
+local_hf=(
+    load_local_hf_settings()
+    if _uses_provider("local_hf", *agents)
     else None
-),
-local_hf_device=os.getenv("LOCAL_HF_DEVICE", "cuda"),
+)
 ```
 
-`src/vox_symposium/providers.py` 改成允許 `local_hf`：
+`src/vox_symposium/providers.py` 的 provider set、env prefix 與 label 都要註冊：
 
 ```python
 SUPPORTED_PROVIDERS = frozenset({... , "local_hf"})
+_PROVIDER_ENV_PREFIXES = {..., "local_hf": "LOCAL_HF"}
+_PROVIDER_LABELS = {..., "local_hf": "Local Hugging Face"}
 ```
 
-接著修改 `src/vox_symposium/models/factory.py`，在 `build_model_from_settings()` 與 `build_model_from_env()` 中註冊：
+接著在 `models/factory.py` 新增共用建構 helper，並讓 `build_model_from_settings()` 與 `build_model_from_env()` 都呼叫它：
 
 ```python
-if provider == "local_hf":
-    if settings.local_hf_model_path is None:
-        raise RuntimeError("LOCAL_HF_MODEL_PATH is required when a participant uses provider=local_hf")
+def _build_local_hf_model(
+    config: LocalHFSettings,
+    instructions: str,
+) -> RealtimeAudioModel:
     return LocalHFRealtimeModel(
-        model_path=settings.local_hf_model_path,
-        device=settings.local_hf_device,
-        instructions=agent.instructions,
+        model_path=config.model_path,
+        device=config.device,
+        instructions=instructions,
     )
 ```
 
@@ -242,7 +245,7 @@ AGENT_SCHOLAR_PROVIDER=local_hf
 AGENT_SCHOLAR_HF_MODEL_PATH=models/hf/scholar-model
 ```
 
-這種寫法需要再把 `Settings` 和 `build_model()` 改成依照 agent identity 讀不同路徑。
+這種寫法需要把 `LocalHFSettings` 改成 per-agent 設定，或讓 loader 接受 agent role；兩個 factory 入口仍應共用同一個 `_build_local_hf_model()`。
 
 ## 依賴安裝
 
@@ -270,7 +273,6 @@ LOCAL_HF_DEVICE=cpu
 
 ```bash
 pip install -r requirements.txt
-pip install -e .
 ```
 
 啟動：
@@ -287,8 +289,8 @@ vox-symposium --participant agent-scholar
 
 常見問題：
 
-- `provider must be 'openai' or 'gemini'`：代表 `config.py` 還沒把 `local_hf` 加進 `_validate_provider()`。
-- `Unsupported provider`：代表 `livekit_participant.py` 的 `build_model()` 還沒註冊 `local_hf`。
+- `Unsupported provider`：確認已在 `providers.py` 註冊 canonical name、env prefix 與 label，並在 `models/factory.py` 的 LiveKit / evaluation 入口加入 dispatch。
+- `configuration is required`：確認 `config.py` 已定義 `local_hf` settings dataclass 與 loader，而且完整 `Settings` 會在角色使用該 provider 時載入它。
 - 沒有聲音輸出：確認 `_run_model_loop()` 有把 PCM16 mono bytes 放進 `_audio_out`，且 `sample_rate` 設成模型實際輸出音訊的 sample rate。
 - 延遲太高：避免在 async event loop 裡直接跑長時間 blocking 推論；可以用背景 thread/process 或本地 websocket server 包裝模型。
 - 音高或語速異常：檢查 `input_sample_rate` / `output_sample_rate` 是否和模型實際格式一致。
@@ -304,3 +306,5 @@ Vox Symposium adapter
 ```
 
 這樣 Vox Symposium 只負責 LiveKit 音訊路由與 provider adapter，模型服務可以獨立管理 GPU、batching、重啟和 logging。
+
+共用 factory、設定生命週期與完整註冊步驟見 [專案架構](architecture.md)。

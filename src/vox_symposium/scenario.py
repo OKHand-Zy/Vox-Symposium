@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from vox_symposium.json_io import read_json, write_json
+from vox_symposium.providers import normalize_provider
 
-AgentKey = str
+AgentKey = Literal["citizen", "scholar"]
 
 DIALOGUE_BEHAVIOR = (
     "Stay in character and respond with the speaking style, perspective, emotions, and reasoning that fit "
@@ -26,6 +27,19 @@ DIALOGUE_BEHAVIOR = (
 MINICPM_DIALOGUE_BEHAVIOR = (
     "Keep each reply under 2 sentences. Ask at most one question. Do not summarize repeatedly."
 )
+
+_SOURCE_ROLE_TO_AGENT: dict[str, AgentKey] = {
+    "human": "citizen",
+    "user": "citizen",
+    "gpt": "scholar",
+    "assistant": "scholar",
+}
+
+
+@dataclass(frozen=True)
+class AgentPrompt:
+    instructions: str
+    initial_history: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -52,6 +66,25 @@ class LoadedScenario:
 
     def build_initial_history(self, agent: AgentKey) -> tuple[dict[str, Any], ...]:
         return build_agent_initial_history(self.data, agent)
+
+    def build_prompt(
+        self,
+        agent: AgentKey,
+        *,
+        provider: str,
+        use_structured_history: bool,
+    ) -> AgentPrompt:
+        dialogue_behavior_extra = (
+            MINICPM_DIALOGUE_BEHAVIOR if normalize_provider(provider) == "minicpm" else None
+        )
+        return AgentPrompt(
+            instructions=self.build_instructions(
+                agent,
+                dialogue_behavior_extra=dialogue_behavior_extra,
+                include_history=not use_structured_history,
+            ),
+            initial_history=(self.build_initial_history(agent) if use_structured_history else ()),
+        )
 
 
 def load_scenario(
@@ -86,10 +119,20 @@ def load_scenarios(
     dialogue_turns: int = 5,
 ) -> list[dict[str, Any]]:
     source_path = Path(path)
-    with source_path.open("r", encoding="utf-8") as file:
-        payload = json.load(file)
+    payload = read_json(source_path)
 
-    records = payload if isinstance(payload, list) else [payload]
+    if isinstance(payload, dict):
+        records = [payload]
+    elif isinstance(payload, list):
+        invalid_index = next(
+            (index for index, record in enumerate(payload) if not isinstance(record, dict)),
+            None,
+        )
+        if invalid_index is not None:
+            raise RuntimeError(f"Scenario dataset entry {invalid_index} must be a JSON object")
+        records = payload
+    else:
+        raise RuntimeError("Scenario JSON must be an object or an array of objects")
     selected = _select_records(records, scenario_id=scenario_id, scenario_index=scenario_index)
     question_audio_root = _question_audio_root(source_path, question_audio_dir)
     return [
@@ -117,7 +160,11 @@ def normalize_scenario(
     row_id = str(record.get("row_id") or scenario_id)
     human_name = str(record.get("human") or _name_from_profile(record.get("character_1", "")))
     gpt_name = str(record.get("gpt") or _name_from_profile(record.get("system", "")))
-    profiles = [record.get("system", ""), record.get("character_1", ""), record.get("character_2", "")]
+    profiles = [
+        record.get("system", ""),
+        record.get("character_1", ""),
+        record.get("character_2", ""),
+    ]
 
     turns = _normalize_turns(
         record.get("conversations") or [],
@@ -261,13 +308,9 @@ def _history_lines_for_agent(scenario: dict[str, Any], agent: AgentKey) -> list[
 
 
 def write_scenarios(path: str | Path, scenarios: list[dict[str, Any]]) -> None:
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] | list[dict[str, Any]]
     payload = scenarios[0] if len(scenarios) == 1 else scenarios
-    with output_path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, ensure_ascii=False, indent=2)
-        file.write("\n")
+    write_json(path, payload)
 
 
 def build_evaluation_result(
@@ -285,7 +328,7 @@ def build_evaluation_result(
     return {
         "scenario_id": scenario.get("id"),
         "run_id": run_id or _default_run_id(str(scenario.get("id", "scenario"))),
-        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "evaluation": {
             "target_agent": evaluation.get("target_agent"),
             "question": evaluation.get("question"),
@@ -323,12 +366,10 @@ def extract_answer_choice(response_text: str, choices: list[str]) -> str | None:
     return None
 
 
-def write_evaluation_result(path: str | Path, result: dict[str, Any] | list[dict[str, Any]]) -> None:
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as file:
-        json.dump(result, file, ensure_ascii=False, indent=2)
-        file.write("\n")
+def write_evaluation_result(
+    path: str | Path, result: dict[str, Any] | list[dict[str, Any]]
+) -> None:
+    write_json(path, result)
 
 
 def main() -> None:
@@ -336,17 +377,26 @@ def main() -> None:
         _save_result_main(sys.argv[2:])
         return
 
-    parser = argparse.ArgumentParser(description="Convert Vox Symposium dataset records into normalized scenarios.")
+    parser = argparse.ArgumentParser(
+        description="Convert Vox Symposium dataset records into normalized scenarios."
+    )
     parser.add_argument("input", help="Source JSON dataset, for example data/two_test.json.")
     parser.add_argument("output", help="Output normalized scenario JSON path.")
     parser.add_argument("--id", dest="scenario_id", help="Convert a single record by id.")
-    parser.add_argument("--index", dest="scenario_index", type=int, help="Convert a single record by zero-based index.")
+    parser.add_argument(
+        "--index",
+        dest="scenario_index",
+        type=int,
+        help="Convert a single record by zero-based index.",
+    )
     parser.add_argument("--audio-dir", help="Directory containing speech wav files.")
     parser.add_argument(
         "--question-audio-dir",
         help="Directory containing question_{id}.wav files. Defaults to data/question_audio/<dataset>.",
     )
-    parser.add_argument("--dialogue-turns", type=int, default=5, help="Dialogue turns before evaluation.")
+    parser.add_argument(
+        "--dialogue-turns", type=int, default=5, help="Dialogue turns before evaluation."
+    )
     args = parser.parse_args()
 
     scenarios = load_scenarios(
@@ -362,15 +412,25 @@ def main() -> None:
 
 def _save_result_main(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(description="Save a scenario evaluation response result.")
-    parser.add_argument("scenario", help="Normalized scenario JSON path, or source dataset with --id/--index.")
+    parser.add_argument(
+        "scenario", help="Normalized scenario JSON path, or source dataset with --id/--index."
+    )
     parser.add_argument("output", help="Output evaluation result JSON path.")
-    parser.add_argument("--id", dest="scenario_id", help="Select a scenario by id when scenario is a dataset.")
-    parser.add_argument("--index", dest="scenario_index", type=int, help="Select a scenario by zero-based index.")
+    parser.add_argument(
+        "--id", dest="scenario_id", help="Select a scenario by id when scenario is a dataset."
+    )
+    parser.add_argument(
+        "--index", dest="scenario_index", type=int, help="Select a scenario by zero-based index."
+    )
     parser.add_argument("--audio-dir", help="Directory containing original speech wav files.")
-    parser.add_argument("--dialogue-turns", type=int, default=5, help="Dialogue turns used by the scenario.")
+    parser.add_argument(
+        "--dialogue-turns", type=int, default=5, help="Dialogue turns used by the scenario."
+    )
     parser.add_argument("--response", help="Final answer text from the evaluated model.")
     parser.add_argument("--response-file", help="Text file containing the final answer.")
-    parser.add_argument("--response-audio", help="Audio file for the evaluated model's final answer.")
+    parser.add_argument(
+        "--response-audio", help="Audio file for the evaluated model's final answer."
+    )
     parser.add_argument("--dialogue-log", help="Optional saved dialogue transcript/log path.")
     parser.add_argument("--run-id", help="Stable run id for this evaluation.")
     args = parser.parse_args(argv)
@@ -420,6 +480,8 @@ def _select_records(
             raise RuntimeError(f"Scenario id not found: {scenario_id}")
         return matches
     if scenario_index is not None:
+        if scenario_index < 0:
+            raise RuntimeError(f"Scenario index must be at least 0, got {scenario_index}")
         try:
             return [records[scenario_index]]
         except IndexError as exc:
@@ -438,8 +500,17 @@ def _normalize_turns(
     turns = []
     audio_paths = _audio_paths(speech, audio_dir=audio_dir)
     for index, turn in enumerate(conversations):
-        source_role = turn.get("from")
-        agent = "citizen" if source_role == "human" else "scholar"
+        if not isinstance(turn, dict):
+            raise RuntimeError(f"Conversation turn {index} must be a JSON object")
+        source_role = str(turn.get("from") or "").strip().lower()
+        try:
+            agent = _SOURCE_ROLE_TO_AGENT[source_role]
+        except KeyError as exc:
+            supported = ", ".join(sorted(_SOURCE_ROLE_TO_AGENT))
+            raise RuntimeError(
+                f"Conversation turn {index} has unsupported role {source_role!r}; "
+                f"expected one of: {supported}"
+            ) from exc
         speaker = human_name if agent == "citizen" else gpt_name
         normalized = {
             "index": index,
@@ -513,7 +584,7 @@ def _normalize_choice_text(text: str) -> str:
 
 
 def _default_run_id(scenario_id: str) -> str:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"{scenario_id}-{timestamp}"
 
 

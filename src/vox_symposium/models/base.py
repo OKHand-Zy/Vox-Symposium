@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from vox_symposium.audio import PcmAudio
 
@@ -45,6 +45,7 @@ class QueueBackedRealtimeAudioModel(RealtimeAudioModel):
     def __init__(self, *, output_queue_size: int = 100) -> None:
         self._audio_out: asyncio.Queue[PcmAudio | None] = asyncio.Queue(maxsize=output_queue_size)
         self._text_out: asyncio.Queue[str | None] = asyncio.Queue(maxsize=output_queue_size)
+        self._output_streams_closed = False
 
     def receive_audio(self) -> AsyncIterator[PcmAudio]:
         return _receive_until_closed(self._audio_out)
@@ -53,8 +54,20 @@ class QueueBackedRealtimeAudioModel(RealtimeAudioModel):
         return _receive_until_closed(self._text_out)
 
     def close_output_streams(self) -> None:
+        if self._output_streams_closed:
+            return
+        self._output_streams_closed = True
         _close_queue(self._audio_out)
         _close_queue(self._text_out)
+
+
+async def cancel_task(task: asyncio.Task[Any] | None) -> None:
+    """Cancel a background task and consume its terminal result."""
+    if task is None or task is asyncio.current_task():
+        return
+    if not task.done():
+        task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
 async def _receive_until_closed(queue: asyncio.Queue[T | None]) -> AsyncIterator[T]:

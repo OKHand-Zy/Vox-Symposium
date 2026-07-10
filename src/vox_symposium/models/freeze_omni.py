@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from array import array
 import json
 import logging
 import sys
+from array import array
 from urllib.parse import urlsplit
 
 from vox_symposium.audio import PcmAudio, normalize_audio
 from vox_symposium.models.base import QueueBackedRealtimeAudioModel
-
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +88,8 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         self.post_turn_poll_chunk_ms = post_turn_poll_chunk_ms
         self.stop_recording_after_turn = stop_recording_after_turn
         self.evaluation_turn_taking = evaluation_turn_taking
-        self._input_chunk_bytes = (
-            int(self.input_sample_rate * input_chunk_ms / 1_000) * 2
-        )
-        self._poll_chunk_bytes = (
-            int(self.input_sample_rate * post_turn_poll_chunk_ms / 1_000) * 2
-        )
+        self._input_chunk_bytes = int(self.input_sample_rate * input_chunk_ms / 1_000) * 2
+        self._poll_chunk_bytes = int(self.input_sample_rate * post_turn_poll_chunk_ms / 1_000) * 2
         self._max_input_silence_bytes = (
             int(self.input_sample_rate * max_input_silence_ms / 1_000) * 2
         )
@@ -146,7 +141,10 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             except Exception as exc:
                 error = self._fatal_error or exc
                 await self._disconnect_client(client)
-                if isinstance(error, FreezeOmniTooManyUsersError) and attempt < self.connect_retries:
+                if (
+                    isinstance(error, FreezeOmniTooManyUsersError)
+                    and attempt < self.connect_retries
+                ):
                     logger.info(
                         "Freeze-Omni server is full; retrying connection in %.1fs (%s/%s)",
                         self.connect_retry_delay,
@@ -227,12 +225,16 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
         @client.on("too_many_users")
         async def on_too_many_users(_data=None) -> None:
             self._set_fatal_error(
-                FreezeOmniTooManyUsersError("Freeze-Omni server rejected the session: too many users")
+                FreezeOmniTooManyUsersError(
+                    "Freeze-Omni server rejected the session: too many users"
+                )
             )
 
         @client.on("out_time")
         async def on_out_time(_data=None) -> None:
-            self._set_fatal_error(RuntimeError("Freeze-Omni server disconnected the session after timeout"))
+            self._set_fatal_error(
+                RuntimeError("Freeze-Omni server disconnected the session after timeout")
+            )
 
         @client.on("stop_tts")
         async def on_stop_tts(_data=None) -> None:
@@ -320,12 +322,9 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             logger.debug("Failed to disconnect Freeze-Omni session cleanly", exc_info=True)
 
     def _consume_prompt_ack_exception(self) -> None:
-        if self._prompt_ack is None or not self._prompt_ack.done():
+        if self._prompt_ack is None or not self._prompt_ack.done() or self._prompt_ack.cancelled():
             return
-        try:
-            self._prompt_ack.exception()
-        except Exception:
-            pass
+        self._prompt_ack.exception()
 
     async def _poll_with_silence(self) -> None:
         silence = b"\x00" * self._poll_chunk_bytes

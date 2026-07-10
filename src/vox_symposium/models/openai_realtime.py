@@ -8,8 +8,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from websockets.asyncio.client import ClientConnection, connect
 
 from vox_symposium.audio import PcmAudio, normalize_audio
-from vox_symposium.models.base import QueueBackedRealtimeAudioModel
-
+from vox_symposium.models.base import QueueBackedRealtimeAudioModel, cancel_task
 
 _AUDIO_TRANSCRIPT_DELTA_EVENTS = {
     "response.audio_transcript.delta",
@@ -88,7 +87,7 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
                         "type": "audio/pcm",
                         "rate": self.output_sample_rate,
                     },
-                }
+                },
             },
         }
         if self.reasoning_effort:
@@ -105,7 +104,9 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
                 "session": session,
             }
         )
-        self._reader_task = asyncio.create_task(self._read_loop(), name=f"openai-{self.model}-reader")
+        self._reader_task = asyncio.create_task(
+            self._read_loop(), name=f"openai-{self.model}-reader"
+        )
 
     async def end_audio_turn(self) -> None:
         if not self.manual_activity:
@@ -161,10 +162,13 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
         )
 
     async def close(self) -> None:
-        if self._reader_task:
-            self._reader_task.cancel()
-        if self._ws:
-            await self._ws.close()
+        reader_task = self._reader_task
+        self._reader_task = None
+        await cancel_task(reader_task)
+        ws = self._ws
+        self._ws = None
+        if ws:
+            await ws.close()
         self.close_output_streams()
 
     async def _send(self, event: dict) -> None:
