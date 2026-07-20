@@ -52,7 +52,7 @@ Scenario prompt 由 `LoadedScenario.build_prompt()` 統一建立：
 
 - Gemini 3 Live 使用 structured initial history，歷史不再重複塞進 system instruction。
 - 其他 provider 把歷史保留在 instruction 文字中。
-- MiniCPM 的短回覆限制也在這一層加入，LiveKit 與 evaluation 不會各自複製規則。
+- MiniCPM 與 Freeze-Omni 的短回覆限制也在這一層加入，LiveKit 與 evaluation 不會各自複製規則。
 
 ## 音訊契約
 

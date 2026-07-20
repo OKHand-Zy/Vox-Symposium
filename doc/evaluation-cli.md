@@ -48,6 +48,11 @@ vox-symposium-evaluate SCENARIO RESULT [options]
 | `--audio-speed AUDIO_SPEED` | `EVALUATION_AUDIO_SPEED` 或 `1.0` | 音訊注入速度。`1.0` 是 real-time；更大的值會更快送音訊，可能降低長批次 timeout 風險，但也可能影響 VAD / turn detection；`0` 表示不 sleep。 |
 | `--no-tts` | `false` | 要求必須有 question audio；如果 scenario 沒有 `evaluation.question_audio` 且沒有傳 `--question-audio`，就直接失敗，不嘗試用 macOS `say` 產生題目音訊。 |
 
+當角色使用 `provider=minicpm` 或 `provider=freeze_omni` 時，scenario prompt
+會在 `Dialogue behavior` 自動追加短回覆規則：每次最多 2 句、最多問 1 個問題，且不要反覆總結。
+這是為了降低長回覆造成的 session 時間與 turn-taking 風險；不會套用到 OpenAI、Gemini、Moshi
+或 PersonaPlex。
+
 ## Timeout 與輸出
 
 | 參數 | 預設 | 說明 |

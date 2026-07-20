@@ -24,9 +24,13 @@ DIALOGUE_BEHAVIOR = (
     "natural opening for the other speaker to continue, grounded in the existing conversation."
 )
 
-MINICPM_DIALOGUE_BEHAVIOR = (
+SHORT_REPLY_DIALOGUE_BEHAVIOR = (
     "Keep each reply under 2 sentences. Ask at most one question. Do not summarize repeatedly."
 )
+# Provider-specific aliases keep the generated prompt and documentation explicit while
+# sharing the same conservative turn-taking policy.
+MINICPM_DIALOGUE_BEHAVIOR = SHORT_REPLY_DIALOGUE_BEHAVIOR
+FREEZE_OMNI_DIALOGUE_BEHAVIOR = SHORT_REPLY_DIALOGUE_BEHAVIOR
 
 _SOURCE_ROLE_TO_AGENT: dict[str, AgentKey] = {
     "human": "citizen",
@@ -75,7 +79,9 @@ class LoadedScenario:
         use_structured_history: bool,
     ) -> AgentPrompt:
         dialogue_behavior_extra = (
-            MINICPM_DIALOGUE_BEHAVIOR if normalize_provider(provider) == "minicpm" else None
+            SHORT_REPLY_DIALOGUE_BEHAVIOR
+            if normalize_provider(provider) in {"minicpm", "freeze_omni"}
+            else None
         )
         return AgentPrompt(
             instructions=self.build_instructions(

@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 
 from vox_symposium.scenario import (
+    FREEZE_OMNI_DIALOGUE_BEHAVIOR,
+    LoadedScenario,
     MINICPM_DIALOGUE_BEHAVIOR,
     build_agent_initial_history,
     build_agent_instructions,
@@ -227,6 +229,37 @@ class ScenarioTests(unittest.TestCase):
             scholar_instructions.index(MINICPM_DIALOGUE_BEHAVIOR),
         )
         self.assertNotIn(MINICPM_DIALOGUE_BEHAVIOR, citizen_instructions)
+
+    def test_freeze_omni_prompt_adds_short_reply_behavior(self) -> None:
+        scenario = normalize_scenario(
+            {
+                "id": "case-1",
+                "human": "Citizen",
+                "gpt": "Scholar",
+                "system": "Scholar; expert profile",
+                "character_1": "Citizen; practical profile",
+                "conversations": [{"from": "gpt", "value": "Opening"}],
+                "question": "Question?",
+                "multichoice": ["A. Yes", "B. No"],
+                "correct_answer": "A",
+            },
+            dialogue_turns=3,
+        )
+
+        loaded = LoadedScenario(scenario)
+        scholar_prompt = loaded.build_prompt(
+            "scholar",
+            provider="freeze-omni",
+            use_structured_history=False,
+        )
+        citizen_prompt = loaded.build_prompt(
+            "citizen",
+            provider="gemini",
+            use_structured_history=False,
+        )
+
+        self.assertIn(FREEZE_OMNI_DIALOGUE_BEHAVIOR, scholar_prompt.instructions)
+        self.assertNotIn(FREEZE_OMNI_DIALOGUE_BEHAVIOR, citizen_prompt.instructions)
 
 
 if __name__ == "__main__":
