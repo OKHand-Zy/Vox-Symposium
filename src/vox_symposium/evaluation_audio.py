@@ -137,6 +137,7 @@ async def collect_text_after_audio(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max_wait
     parts: list[str] = []
+    received_text = False
     while True:
         while True:
             try:
@@ -147,19 +148,25 @@ async def collect_text_after_audio(
                 return "".join(parts).strip()
             if item:
                 parts.append(item)
+                received_text = True
 
         remaining = deadline - loop.time()
         if remaining <= 0:
             break
 
         try:
-            item = await asyncio.wait_for(queue.get(), timeout=min(idle_timeout, remaining))
+            # Text can start later than the audio stream. Before the first
+            # chunk arrives, wait for the full grace period; once generation
+            # has started, use the shorter idle timeout to detect completion.
+            timeout = min(idle_timeout, remaining) if received_text else remaining
+            item = await asyncio.wait_for(queue.get(), timeout=timeout)
         except TimeoutError:
             break
         if item is None:
             break
         if item:
             parts.append(item)
+            received_text = True
     return "".join(parts).strip()
 
 
