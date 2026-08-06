@@ -1,25 +1,14 @@
 # Vox Symposium
 
-Vox Symposium 是一個 Python runtime，用 LiveKit Room 當 WebRTC audio router，讓兩個可程式化的 realtime audio participant 在同一個房間中互相通話。
+Vox Symposium 是一個以 scenario 為核心的 realtime audio model 評測 runtime。
+它會載入劇情、串流對話音訊給兩個模型代理，並保存對話、回答音訊與評測結果。
 
 ```text
-LiveKit Room
-  agent-citizen:
-    訂閱 agent-scholar audio track
-    將音訊送進自己的 realtime model input
-    將 model audio output 發布成 LiveKit audio track
-
-  agent-scholar:
-    訂閱 agent-citizen audio track
-    將音訊送進自己的 realtime model input
-    將 model audio output 發布成 LiveKit audio track
-```
-
-資料流：
-
-```text
-Agent-Citizen model output -> Agent-Citizen LiveKit audio track -> Agent-Scholar model input
-Agent-Scholar model output -> Agent-Scholar LiveKit audio track -> Agent-Citizen model input
+scenario / dataset
+  -> evaluation.py 建立角色 prompt
+  -> 兩個 realtime model adapter
+  -> evaluation_audio.py 串流 opening、對話與測驗題
+  -> result JSON、WAV、transcript 與 summary
 ```
 
 ## 文件導覽
@@ -345,9 +334,6 @@ cp .env.example .env
 
 編輯 `.env`，常見必要 key：
 
-- `LIVEKIT_URL`
-- `LIVEKIT_API_KEY`
-- `LIVEKIT_API_SECRET`
 - OpenAI 官方 API：`OPENAI_API_KEY`
 - Azure OpenAI：`AZURE_OPENAI_API_KEY`、`AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_DEPLOYMENT_NAME`
 - Gemini 使用 AI Studio 時：`GEMINI_API_KEY`
@@ -432,12 +418,10 @@ MINICPM_QUEUE_TIMEOUT=300
 ```
 
 正式環境應使用 `wss://`。若 reverse proxy 驗證 Bearer token，再設定
-`MINICPM_API_KEY`。adapter 會持續轉送 LiveKit 音訊，不使用 client-side VAD
-切斷靜音，讓模型保留完整的 full-duplex listen/speak 判斷。
-自動 evaluation 需要固定交替回合，因此只在 evaluation runner 中額外要求 MiniCPM
-於對方說完後輸出語音，並追加靜音 input chunk 讓模型繼續進行 listen/speak
+`MINICPM_API_KEY`。自動 evaluation 需要固定交替回合，因此 evaluation runner
+會在對方說完後輸出語音，並追加靜音 input chunk 讓模型繼續進行 listen/speak
 決策。模型說話期間會持續以即時速度送入靜音，直到模型回到 `listen`，避免
-full-duplex 生成因沒有後續 input 而中途停止；一般 LiveKit participant 不會加入這項限制。
+full-duplex 生成因沒有後續 input 而中途停止。
 
 Freeze-Omni 需要先啟動官方 [VITA-MLLM/Freeze-Omni](https://github.com/VITA-MLLM/Freeze-Omni)
 Flask-SocketIO demo server。Vox Symposium 只連 server，不直接在主流程載入
@@ -470,8 +454,8 @@ FREEZE_OMNI_STOP_RECORDING_AFTER_TURN=true
 ```
 
 官方 server 預設使用自簽憑證，因此本 adapter 預設 `FREEZE_OMNI_SSL_VERIFY=false`。
-正式環境如果換成可信任憑證，可以設為 `true`。一般 LiveKit participant 會維持連續音訊流；
-evaluation runner 則會啟用固定回合控制，包含 `recording-started` / `recording-stopped`、
+正式環境如果換成可信任憑證，可以設為 `true`。evaluation runner 會啟用固定回合控制，
+包含 `recording-started` / `recording-stopped`、
 turn 前靜音、輸入靜音壓縮，以及回合結束後用短靜音輪詢 queued TTS 音訊。
 
 官方 `bin/server.py` 預設只 emit 音訊，不會把生成文字送回 client。若要讓 Vox 同時保存
@@ -509,46 +493,17 @@ PERSONAPLEX_REALTIME_URL=ws://127.0.0.1:8998/api/chat?voice_prompt=NATF2.pt
 
 PersonaPlex 部署、voice prompt 與 server patch 請看 [doc/personaplex-live-server.md](doc/personaplex-live-server.md)。
 
-## 啟動
+## 評測執行
 
-在同一個 process 裡啟動兩個 participant：
-
-```bash
-vox-symposium
-```
-
-預設會保存對話過程中模型輸出的語音與 transcript 文字：
-
-```text
-data/recordings/<run-id>/
-  conversation-log.json
-  agent-citizen-0001.wav
-  agent-scholar-0001.wav
-  ...
-```
-
-`conversation-log.json` 的每個 `model_output_turn` event 都會把文字和音檔放在同一筆紀錄中，方便後續用 JSON index 對應：
-
-```json
-{
-  "type": "model_output_turn",
-  "agent": "agent-scholar",
-  "text": "Transcript text from the provider.",
-  "audio": "data/recordings/20260618T120000Z-vox-symposium-both/agent-scholar-0001.wav",
-  "sample_rate": 24000,
-  "channels": 1,
-  "duration_seconds": 2.42
-}
-```
-
-可以用 `--record-dir` 或 `VOX_RECORD_DIR` 改變輸出位置；若只想跑即時轉發、不保存紀錄，可加 `--no-record`。
-
-也可以分開啟動：
+評測唯一的 runtime 入口是：
 
 ```bash
-vox-symposium --participant agent-citizen
-vox-symposium --participant agent-scholar
+python3 -m vox_symposium SCENARIO RESULT [options]
+# 或
+vox-symposium-evaluate SCENARIO RESULT [options]
 ```
+
+完整參數與常用範例請看 [Evaluation CLI 完整參數](doc/evaluation-cli.md)。
 
 ## 開發檢查
 
@@ -564,117 +519,14 @@ pyright
 
 完整規範見 [doc/development.md](doc/development.md)。
 
-## LiveKit 整合測試
-
-先確認 conda 環境已啟用，並且已安裝依賴：
-
-```bash
-conda activate vox-symposium
-pip install -r requirements.txt
-```
-
-建立 `.env`，至少填入 LiveKit 設定：
-
-```env
-LIVEKIT_URL=wss://your-livekit-url
-LIVEKIT_API_KEY=your-livekit-api-key
-LIVEKIT_API_SECRET=your-livekit-api-secret
-```
-
-如果兩個角色都使用 OpenAI，加入：
-
-```env
-AGENT_CITIZEN_PROVIDER=openai
-AGENT_SCHOLAR_PROVIDER=openai
-OPENAI_API_KEY=your-openai-api-key
-OPENAI_REALTIME_MODEL=gpt-realtime-2
-OPENAI_REALTIME_VOICE=marin
-OPENAI_REALTIME_REASONING_EFFORT=low
-OPENAI_REALTIME_PING_INTERVAL=20
-OPENAI_REALTIME_PING_TIMEOUT=120
-```
-
-改用 Azure OpenAI 時，將上段的 `OPENAI_API_KEY` 換成：
-
-```env
-OPENAI_BACKEND=azure
-AZURE_OPENAI_API_KEY=your-azure-openai-api-key
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
-AZURE_OPENAI_DEPLOYMENT_NAME=your-gpt-realtime-deployment
-```
-
-如果其中一個角色使用 Gemini，才需要加入：
-
-```env
-GEMINI_API_KEY=your-gemini-api-key
-```
-
-或使用 Vertex AI：
-
-```env
-GEMINI_BACKEND=vertex
-GOOGLE_CLOUD_PROJECT=your-google-cloud-project
-GOOGLE_CLOUD_LOCATION=us-central1
-GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
-```
-
-如果其中一個角色使用 MiniCPM-o 4.5，加入：
-
-```env
-AGENT_SCHOLAR_PROVIDER=minicpm
-MINICPM_REALTIME_URL=ws://127.0.0.1:8006/v1/realtime?mode=audio
-```
-
-如果其中一個角色使用 Moshi，加入：
-
-```env
-AGENT_SCHOLAR_PROVIDER=moshi
-MOSHI_REALTIME_URL=ws://127.0.0.1:8998/api/chat
-```
-
-Kyutai 官方 Moshi server 不會讀取 Vox 寫入 URL 的 `text_prompt` query，所以
-Moshi 不會套用角色 prompt、場景 prompt 或歷史對話 prompt。若需要 prompt
-conditioning，請使用支援 `text_prompt` 的 Moshi-compatible server，例如
-PersonaPlex live server，或自行 patch server。
-
-如果其中一個角色使用 PersonaPlex live server，加入：
-
-```env
-AGENT_SCHOLAR_PROVIDER=personaplex
-PERSONAPLEX_REALTIME_URL=ws://127.0.0.1:8998/api/chat?voice_prompt=NATF2.pt
-```
-
-Vox 會把每個 scenario/case 的 Scholar instructions 動態寫入 PersonaPlex 的 `text_prompt` query。
-部署與已知問題請看 [doc/personaplex-live-server.md](doc/personaplex-live-server.md)。
-
-啟動測試：
-
-```bash
-vox-symposium
-```
-
-也可以分開兩個 terminal 測試：
-
-```bash
-vox-symposium --participant agent-citizen
-vox-symposium --participant agent-scholar
-```
-
-預設房間名稱是 `vox-symposium`。如需改房間名，在 `.env` 加上：
-
-```env
-LIVEKIT_ROOM=test-room
-```
-
 ## 音訊格式
 
-- LiveKit 發布音訊時使用 mono 48 kHz PCM frame。
 - OpenAI Realtime input 會被 resample 成 mono 24 kHz PCM。
 - Gemini Live input 會被 resample 成 mono 16 kHz PCM。
 - MiniCPM input 會轉成 mono 16 kHz float32 PCM；output 24 kHz float32 PCM 會轉回 PCM16。
-- Freeze-Omni input 會轉成 mono 16 kHz PCM16；output 24 kHz PCM16 會直接發布。
+- Freeze-Omni input 會轉成 mono 16 kHz PCM16；output 24 kHz PCM16 會保存至 evaluation artifacts。
 - Moshi / PersonaPlex adapter 會把 PCM16 轉成 24 kHz mono Opus pages，並將 output Opus pages 解回 PCM16。
-- Model output 預期為 mono 24 kHz PCM，發布回 LiveKit 前會 resample 成 LiveKit publish sample rate。
+- Model output 會由 evaluation runner 保存為 PCM WAV，並與 transcript、scenario result 一起寫入 artifacts。
 
 ## 擴充其他模型
 

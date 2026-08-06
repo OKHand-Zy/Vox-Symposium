@@ -1,13 +1,11 @@
 [project]
 name = "vox-symposium"
 version = "0.1.0"
-description = "Two programmable LiveKit audio participants bridged to realtime audio models."
+description = "Dataset-driven realtime audio model evaluation runtime."
 requires-python = ">=3.11"
 dependencies = [
     "google-auth>=2.14.1",
     "google-genai>=1.67.0",
-    "livekit>=1.0.18",
-    "livekit-api>=1.0.5",
     "python-dotenv>=1.0.1",
     "websockets>=13.1",
 ]
@@ -26,7 +24,6 @@ freeze-omni = [
 ]
 
 [project.scripts]
-vox-symposium = "vox_symposium.main:main"
 vox-symposium-evaluate = "vox_symposium.evaluation:main"
 vox-symposium-scenario = "vox_symposium.scenario:main"
 

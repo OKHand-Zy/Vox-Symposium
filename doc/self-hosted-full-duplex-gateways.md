@@ -33,8 +33,8 @@ FREEZE_OMNI_SSL_VERIFY=false
 官方 demo server 通常使用自簽 HTTPS 憑證，因此本 adapter 預設
 `FREEZE_OMNI_SSL_VERIFY=false`。正式環境如果換成可信任憑證，可以設為 `true`。
 
-一般 LiveKit participant 使用 Freeze-Omni 時會維持連續音訊流。evaluation runner
-才會啟用固定回合控制，包括 `recording-started` / `recording-stopped`、turn 前靜音、
+evaluation runner 會啟用固定回合控制，包括 `recording-started` / `recording-stopped`、
+turn 前靜音、
 輸入靜音壓縮，以及回合結束後用短靜音輪詢 queued TTS 音訊。這些參數集中記錄在
 [Freeze-Omni 文字事件與多回合 VAD patch](freeze-omni-text-events.md)。
 

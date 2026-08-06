@@ -64,7 +64,7 @@ from vox_symposium.evaluation_audio import (
 )
 from vox_symposium.json_io import write_json
 from vox_symposium.models.base import RealtimeAudioModel
-from vox_symposium.models.factory import build_model_from_env
+from vox_symposium.models.factory import build_evaluation_model_from_env
 from vox_symposium.providers import normalize_provider
 from vox_symposium.recording import audio_event_fields, write_wav
 from vox_symposium.scenario import (
@@ -557,11 +557,10 @@ def _build_model(
     *,
     initial_history: tuple[dict[str, Any], ...] = (),
 ) -> RealtimeAudioModel:
-    return build_model_from_env(
+    return build_evaluation_model_from_env(
         _agent_provider(agent),
         instructions,
         initial_history=initial_history,
-        evaluation_mode=True,
     )
 
 

@@ -372,7 +372,6 @@ afplay data/results/00000000-minicpm-smoke-artifacts/scholar-answer.wav
   `MINICPM_PING_TIMEOUT` 設為 `none`。
 - Vox Symposium evaluation 在模型說話期間會持續送入即時靜音，直到模型回到 `listen`，
   避免 WAV 說到一半被中斷。
-- 一般 LiveKit participant 本身已有連續音訊輸入，不需要 evaluation 的額外靜音泵。
 - Vox 會在使用 `provider=minicpm` 或 `provider=freeze_omni` 的那位角色的 `Dialogue behavior` 自動追加短回覆規則：
   `Keep each reply under 2 sentences. Ask at most one question. Do not summarize repeatedly.`
   這是為了降低長回覆造成的 session 時間、turn-taking 和 downstream realtime model

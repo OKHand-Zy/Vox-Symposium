@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from vox_symposium.env import (
     bool_env,
-    env_with_legacy,
     first_env,
     float_env,
     int_env,
-    load_environment,
     normalized_env,
     optional_float_env,
     optional_int_env,
@@ -21,18 +19,9 @@ from vox_symposium.env import (
 )
 from vox_symposium.providers import (
     MOSHI_PROTOCOL_PROVIDERS,
-    SUPPORTED_PROVIDERS,
     normalize_provider,
     provider_env_prefix,
 )
-
-
-@dataclass(frozen=True)
-class AgentConfig:
-    identity: str
-    provider: str
-    instructions: str
-    initial_history: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,102 +95,6 @@ class FreezeOmniSettings:
     post_turn_idle_seconds: float
     post_turn_poll_chunk_ms: int
     stop_recording_after_turn: bool
-
-
-@dataclass(frozen=True)
-class Settings:
-    livekit_url: str
-    livekit_api_key: str
-    livekit_api_secret: str
-    livekit_room: str
-    publish_sample_rate: int
-    frame_ms: int
-    agent_citizen: AgentConfig
-    agent_scholar: AgentConfig
-    openai: OpenAISettings | None
-    gemini: GeminiSettings | None
-    minicpm: MiniCPMSettings | None
-    freeze_omni: FreezeOmniSettings | None
-    moshi_protocols: dict[str, MoshiSettings]
-
-
-def load_settings() -> Settings:
-    load_environment()
-    agent_citizen = _load_agent(
-        role="citizen",
-        legacy_role="A",
-        default_provider="openai",
-        default_instructions=(
-            "You are Agent-Citizen, representing a human user. "
-            "Keep replies concise and conversational."
-        ),
-    )
-    agent_scholar = _load_agent(
-        role="scholar",
-        legacy_role="B",
-        default_provider="gemini",
-        default_instructions=(
-            "You are Agent-Scholar, the voice agent under test. "
-            "Keep replies concise and conversational."
-        ),
-    )
-    agent_citizen, agent_scholar = _apply_scenario_instructions(agent_citizen, agent_scholar)
-    _validate_provider(agent_citizen)
-    _validate_provider(agent_scholar)
-    agents = (agent_citizen, agent_scholar)
-    moshi_protocols = {
-        provider: settings
-        for provider in MOSHI_PROTOCOL_PROVIDERS
-        if _uses_provider(provider, *agents)
-        for settings in [load_moshi_settings(provider, required=True)]
-        if settings is not None
-    }
-
-    return Settings(
-        livekit_url=required_env("LIVEKIT_URL"),
-        livekit_api_key=required_env("LIVEKIT_API_KEY"),
-        livekit_api_secret=required_env("LIVEKIT_API_SECRET"),
-        livekit_room=os.getenv("LIVEKIT_ROOM", "vox-symposium"),
-        publish_sample_rate=int_env("LIVEKIT_PUBLISH_SAMPLE_RATE", 48_000),
-        frame_ms=int_env("LIVEKIT_FRAME_MS", 20),
-        agent_citizen=agent_citizen,
-        agent_scholar=agent_scholar,
-        openai=(load_openai_settings() if _uses_provider("openai", *agents) else None),
-        gemini=(load_gemini_settings() if _uses_provider("gemini", *agents) else None),
-        minicpm=(load_minicpm_settings() if _uses_provider("minicpm", *agents) else None),
-        freeze_omni=(
-            load_freeze_omni_settings() if _uses_provider("freeze_omni", *agents) else None
-        ),
-        moshi_protocols=moshi_protocols,
-    )
-
-
-def _load_agent(
-    *,
-    role: str,
-    legacy_role: str,
-    default_provider: str,
-    default_instructions: str,
-) -> AgentConfig:
-    prefix = f"AGENT_{role.upper()}"
-    legacy_prefix = f"AGENT_{legacy_role}"
-    return AgentConfig(
-        identity=env_with_legacy(
-            f"{prefix}_IDENTITY",
-            f"{legacy_prefix}_IDENTITY",
-            default=f"agent-{role}",
-        ),
-        provider=_provider_env(
-            f"{prefix}_PROVIDER",
-            f"{legacy_prefix}_PROVIDER",
-            default=default_provider,
-        ),
-        instructions=env_with_legacy(
-            f"{prefix}_INSTRUCTIONS",
-            f"{legacy_prefix}_INSTRUCTIONS",
-            default=default_instructions,
-        ),
-    )
 
 
 def load_openai_auth() -> OpenAIAuthConfig:
@@ -373,71 +266,12 @@ def load_moshi_settings(provider: str = "moshi", *, required: bool) -> MoshiSett
     )
 
 
-def _provider_env(primary: str, legacy: str, *, default: str) -> str:
-    return normalize_provider(env_with_legacy(primary, legacy, default=default))
-
-
-def _apply_scenario_instructions(
-    agent_citizen: AgentConfig,
-    agent_scholar: AgentConfig,
-) -> tuple[AgentConfig, AgentConfig]:
-    scenario_file = os.getenv("SCENARIO_FILE")
-    if not scenario_file:
-        return agent_citizen, agent_scholar
-
-    from vox_symposium.scenario import load_scenario
-
-    scenario = load_scenario(
-        scenario_file,
-        scenario_id=os.getenv("SCENARIO_ID"),
-        scenario_index=optional_int_env("SCENARIO_INDEX"),
-        audio_dir=os.getenv("SCENARIO_AUDIO_DIR"),
-        dialogue_turns=int_env("SCENARIO_DIALOGUE_TURNS", 5),
-    )
-    citizen_uses_initial_history = provider_uses_structured_history(agent_citizen.provider)
-    scholar_uses_initial_history = provider_uses_structured_history(agent_scholar.provider)
-    citizen_prompt = scenario.build_prompt(
-        "citizen",
-        provider=agent_citizen.provider,
-        use_structured_history=citizen_uses_initial_history,
-    )
-    scholar_prompt = scenario.build_prompt(
-        "scholar",
-        provider=agent_scholar.provider,
-        use_structured_history=scholar_uses_initial_history,
-    )
-    return (
-        replace(
-            agent_citizen,
-            instructions=citizen_prompt.instructions,
-            initial_history=citizen_prompt.initial_history,
-        ),
-        replace(
-            agent_scholar,
-            instructions=scholar_prompt.instructions,
-            initial_history=scholar_prompt.initial_history,
-        ),
-    )
-
-
 def provider_uses_structured_history(provider: str) -> bool:
     """Return whether the selected provider/model accepts structured scenario history."""
     if normalize_provider(provider) != "gemini":
         return False
     backend = normalized_env("GEMINI_BACKEND", "ai_studio")
     return gemini_uses_thinking_level(gemini_live_model(backend))
-
-
-def _uses_provider(provider: str, *agents: AgentConfig) -> bool:
-    return any(normalize_provider(agent.provider) == provider for agent in agents)
-
-
-def _validate_provider(agent: AgentConfig) -> None:
-    if normalize_provider(agent.provider) not in SUPPORTED_PROVIDERS:
-        supported = "', '".join(sorted(SUPPORTED_PROVIDERS))
-        raise RuntimeError(
-            f"{agent.identity} provider must be one of '{supported}', got {agent.provider!r}"
-        )
 
 
 def _env_names(provider: str, suffix: str) -> list[str]:

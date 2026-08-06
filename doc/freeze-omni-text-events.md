@@ -18,8 +18,8 @@ Vox Symposium 會透過 `RealtimeAudioModel.receive_text()` 消費 `text_delta`�
 
 以下是 Vox Symposium 端支援的 `FREEZE_OMNI_*` 設定。表格中的值是目前程式預設值，
 也是在 `two_test_dataset` 前 3 筆、每段最多 90 秒的 smoke test 中可完整跑完的建議值。
-一般 LiveKit participant 會維持連續音訊流；turn 前靜音、輸入靜音壓縮與 post-turn
-silence polling 只會在 evaluation runner 的固定回合模式中啟用。
+turn 前靜音、輸入靜音壓縮與 post-turn silence polling 會在 evaluation runner 的
+固定回合模式中啟用。
 
 | 參數 | 預設/建議值 | 說明 |
 | --- | --- | --- |

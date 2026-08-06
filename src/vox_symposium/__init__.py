@@ -1,4 +1,4 @@
-"""LiveKit audio router runtime for model-to-model realtime conversations."""
+"""Realtime audio model evaluation runtime."""
 
 __all__ = ["__version__"]
 

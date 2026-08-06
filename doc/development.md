@@ -10,7 +10,7 @@ conda activate vox-symposium
 pip install -e '.[dev]'
 ```
 
-若要執行實際 provider 或 LiveKit 整合測試，再依需求安裝：
+若要執行實際 provider smoke test，再依需求安裝：
 
 ```bash
 pip install -e '.[moshi]'
@@ -45,7 +45,7 @@ ruff format src tests
 - Scenario normalization、prompt/history 與答案抽取。
 - Evaluation 分段、續跑、artifacts 清理、summary 與 CLI 驗證。
 
-單元測試不會連外，也不需要 API key。LiveKit、OpenAI、Gemini 與 self-hosted provider 的網路協定仍應在對應環境做 smoke test。
+單元測試不會連外，也不需要 API key。OpenAI、Gemini 與 self-hosted provider 的網路協定仍應在對應環境做 smoke test。
 
 ## 變更原則
 

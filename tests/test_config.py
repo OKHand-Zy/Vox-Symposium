@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
 import os
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from vox_symposium.config import (
@@ -12,10 +9,12 @@ from vox_symposium.config import (
     gemini_thinking_budget,
     gemini_thinking_level,
     gemini_uses_thinking_level,
+    load_gemini_settings,
     load_moshi_settings,
-    load_settings,
+    provider_uses_structured_history,
 )
 from vox_symposium.env import bool_env
+from vox_symposium.scenario import LoadedScenario, normalize_scenario
 
 
 class ConfigTests(unittest.TestCase):
@@ -73,20 +72,14 @@ class ConfigTests(unittest.TestCase):
 
     def test_gemini_2_5_does_not_parse_3_1_initial_history_setting(self) -> None:
         env = {
-            "LIVEKIT_URL": "ws://localhost:7880",
-            "LIVEKIT_API_KEY": "key",
-            "LIVEKIT_API_SECRET": "secret",
-            "AGENT_CITIZEN_PROVIDER": "gemini",
-            "AGENT_SCHOLAR_PROVIDER": "gemini",
             "GEMINI_API_KEY": "key",
             "GEMINI_LIVE_MODEL": "gemini-live-2.5-flash-native-audio",
             "GEMINI_LIVE_INITIAL_HISTORY_JSON": "not-json",
         }
         with patch.dict(os.environ, env, clear=True):
-            settings = load_settings()
+            settings = load_gemini_settings()
 
-        assert settings.gemini is not None
-        self.assertEqual(settings.gemini.initial_history, ())
+        self.assertEqual(settings.initial_history, ())
 
     def test_scenario_history_uses_initial_content_only_for_gemini_3(self) -> None:
         scenario = {
@@ -100,37 +93,37 @@ class ConfigTests(unittest.TestCase):
                 {"from": "gpt", "value": "Opening"},
             ],
         }
-        base_env = {
-            "LIVEKIT_URL": "ws://localhost:7880",
-            "LIVEKIT_API_KEY": "key",
-            "LIVEKIT_API_SECRET": "secret",
-            "AGENT_CITIZEN_PROVIDER": "gemini",
-            "AGENT_SCHOLAR_PROVIDER": "gemini",
-            "GEMINI_API_KEY": "key",
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            scenario_path = Path(tmpdir) / "scenario.json"
-            scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
-            base_env["SCENARIO_FILE"] = str(scenario_path)
+        loaded = LoadedScenario(normalize_scenario(scenario))
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_LIVE_MODEL": "gemini-live-2.5-flash-native-audio",
+            },
+            clear=True,
+        ):
+            prompt_2_5 = loaded.build_prompt(
+                "scholar",
+                provider="gemini",
+                use_structured_history=provider_uses_structured_history("gemini"),
+            )
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_LIVE_MODEL": "gemini-3.1-flash-live-preview",
+            },
+            clear=True,
+        ):
+            prompt_3_1 = loaded.build_prompt(
+                "scholar",
+                provider="gemini",
+                use_structured_history=provider_uses_structured_history("gemini"),
+            )
 
-            with patch.dict(
-                os.environ,
-                {**base_env, "GEMINI_LIVE_MODEL": "gemini-live-2.5-flash-native-audio"},
-                clear=True,
-            ):
-                settings_2_5 = load_settings()
-            with patch.dict(
-                os.environ,
-                {**base_env, "GEMINI_LIVE_MODEL": "gemini-3.1-flash-live-preview"},
-                clear=True,
-            ):
-                settings_3_1 = load_settings()
-
-        self.assertIn("Prior conversation history:", settings_2_5.agent_scholar.instructions)
-        self.assertEqual(settings_2_5.agent_scholar.initial_history, ())
-        self.assertNotIn("Prior conversation history:", settings_3_1.agent_scholar.instructions)
+        self.assertIn("Prior conversation history:", prompt_2_5.instructions)
+        self.assertEqual(prompt_2_5.initial_history, ())
+        self.assertNotIn("Prior conversation history:", prompt_3_1.instructions)
         self.assertEqual(
-            settings_3_1.agent_scholar.initial_history,
+            prompt_3_1.initial_history,
             (
                 {"role": "user", "parts": [{"text": "Hello"}]},
                 {"role": "model", "parts": [{"text": "Opening"}]},

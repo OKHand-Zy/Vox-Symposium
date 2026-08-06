@@ -3,6 +3,12 @@
 `src/vox_symposium/evaluation.py` 用來跑自動化 scenario evaluation。基本格式：
 
 ```bash
+python3 -m vox_symposium SCENARIO RESULT [options]
+```
+
+也可以直接指定 evaluation module：
+
+```bash
 python3 -m vox_symposium.evaluation SCENARIO RESULT [options]
 ```
 

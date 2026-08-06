@@ -1,6 +1,6 @@
 # 使用自己的本地 Hugging Face 即時語音模型
 
-這份文件說明如果要把 Vox Symposium 從 OpenAI Realtime / Gemini Live 改接自己的本地 Hugging Face 語音模型，需要把模型放在哪、程式要新增哪個 adapter，以及 `.env` 要怎麼設定。
+這份文件說明如果要把 Vox Symposium 的 evaluation runner 從 OpenAI Realtime / Gemini Live 改接自己的本地 Hugging Face 語音模型，需要把模型放在哪、程式要新增哪個 adapter，以及 `.env` 要怎麼設定。
 
 目前專案內建 provider 包含：
 
@@ -41,10 +41,10 @@ Vox-Symposium/
 
 ## 模型需要提供的能力
 
-Vox Symposium 的 participant 會做兩件事：
+Vox Symposium 的 evaluation runner 會做兩件事：
 
-1. 從 LiveKit 收到對方音訊，呼叫 `send_audio()` 持續送進模型。
-2. 從模型拿到輸出音訊，透過 `receive_audio()` 持續發布回 LiveKit。
+1. 將 scenario 的 opening、對話音訊與測驗題音訊，透過 `send_audio()` 送進模型。
+2. 從模型取得 `receive_audio()` 輸出，保存為 WAV 並寫入 evaluation artifacts。
 
 因此本地 Hugging Face 模型最好能支援 streaming audio input / streaming audio output。若你的模型只能「整段音訊輸入，整段音訊輸出」，也可以接，但 adapter 需要自己處理：
 
@@ -60,7 +60,7 @@ input_sample_rate = 16_000
 output_sample_rate = 24_000
 ```
 
-LiveKit 送進來的音訊會依照 `input_sample_rate` 轉成 mono PCM16；模型輸出的 `PcmAudio` 也會在發布回 LiveKit 前自動轉成 LiveKit publish sample rate。
+evaluation 送進來的音訊會依照 `input_sample_rate` 轉成 mono PCM16；模型輸出的 `PcmAudio` 會由 runner 依實際 sample rate 保存為 WAV。
 
 ## 新增 adapter
 
@@ -173,15 +173,8 @@ def load_local_hf_settings() -> LocalHFSettings:
     )
 ```
 
-在 `Settings` 新增 `local_hf: LocalHFSettings | None`，並在 `load_settings()` 建立它：
-
-```python
-local_hf=(
-    load_local_hf_settings()
-    if _uses_provider("local_hf", *agents)
-    else None
-)
-```
+evaluation 使用 `build_evaluation_model_from_env()` 建立模型，因此只需要在 provider 選擇分支中呼叫
+`load_local_hf_settings()`。
 
 `src/vox_symposium/providers.py` 的 provider set、env prefix 與 label 都要註冊：
 
@@ -191,7 +184,8 @@ _PROVIDER_ENV_PREFIXES = {..., "local_hf": "LOCAL_HF"}
 _PROVIDER_LABELS = {..., "local_hf": "Local Hugging Face"}
 ```
 
-接著在 `models/factory.py` 新增共用建構 helper，並讓 `build_model_from_settings()` 與 `build_model_from_env()` 都呼叫它：
+接著在 `models/factory.py` 新增建構 helper，並在 `build_evaluation_model_from_env()` 的 `local_hf`
+分支呼叫它：
 
 ```python
 def _build_local_hf_model(
@@ -210,10 +204,6 @@ def _build_local_hf_model(
 只把 Agent-Scholar 換成本地 HF 模型，Agent-Citizen 仍使用 Gemini：
 
 ```env
-LIVEKIT_URL=wss://your-livekit-url
-LIVEKIT_API_KEY=your-livekit-api-key
-LIVEKIT_API_SECRET=your-livekit-api-secret
-
 AGENT_CITIZEN_PROVIDER=gemini
 GEMINI_API_KEY=your-gemini-api-key
 
@@ -225,10 +215,6 @@ LOCAL_HF_DEVICE=cuda
 兩邊都使用本地 HF 模型：
 
 ```env
-LIVEKIT_URL=wss://your-livekit-url
-LIVEKIT_API_KEY=your-livekit-api-key
-LIVEKIT_API_SECRET=your-livekit-api-secret
-
 AGENT_CITIZEN_PROVIDER=local_hf
 AGENT_SCHOLAR_PROVIDER=local_hf
 LOCAL_HF_MODEL_PATH=models/hf/your-model
@@ -245,7 +231,8 @@ AGENT_SCHOLAR_PROVIDER=local_hf
 AGENT_SCHOLAR_HF_MODEL_PATH=models/hf/scholar-model
 ```
 
-這種寫法需要把 `LocalHFSettings` 改成 per-agent 設定，或讓 loader 接受 agent role；兩個 factory 入口仍應共用同一個 `_build_local_hf_model()`。
+這種寫法需要把 `LocalHFSettings` 改成 per-agent 設定，或讓 loader 接受 agent role；evaluation
+會為 citizen 與 scholar 分別建立自己的 adapter instance。
 
 ## 依賴安裝
 
@@ -278,19 +265,13 @@ pip install -r requirements.txt
 啟動：
 
 ```bash
-vox-symposium
-```
-
-如果只想先測本地 HF 那一邊：
-
-```bash
-vox-symposium --participant agent-scholar
+vox-symposium-evaluate data/scenarios/00000000.json data/results/00000000-local-hf.json
 ```
 
 常見問題：
 
-- `Unsupported provider`：確認已在 `providers.py` 註冊 canonical name、env prefix 與 label，並在 `models/factory.py` 的 LiveKit / evaluation 入口加入 dispatch。
-- `configuration is required`：確認 `config.py` 已定義 `local_hf` settings dataclass 與 loader，而且完整 `Settings` 會在角色使用該 provider 時載入它。
+- `Unsupported provider`：確認已在 `providers.py` 註冊 canonical name、env prefix 與 label，並在 `models/factory.py` 的 evaluation factory 加入 dispatch。
+- `configuration is required`：確認 `config.py` 已定義 `local_hf` settings dataclass 與 loader。
 - 沒有聲音輸出：確認 `_run_model_loop()` 有把 PCM16 mono bytes 放進 `_audio_out`，且 `sample_rate` 設成模型實際輸出音訊的 sample rate。
 - 延遲太高：避免在 async event loop 裡直接跑長時間 blocking 推論；可以用背景 thread/process 或本地 websocket server 包裝模型。
 - 音高或語速異常：檢查 `input_sample_rate` / `output_sample_rate` 是否和模型實際格式一致。
@@ -305,6 +286,6 @@ Vox Symposium adapter
       -> Hugging Face model process
 ```
 
-這樣 Vox Symposium 只負責 LiveKit 音訊路由與 provider adapter，模型服務可以獨立管理 GPU、batching、重啟和 logging。
+這樣 Vox Symposium 只負責 evaluation 音訊流程與 provider adapter，模型服務可以獨立管理 GPU、batching、重啟和 logging。
 
 共用 factory、設定生命週期與完整註冊步驟見 [專案架構](architecture.md)。

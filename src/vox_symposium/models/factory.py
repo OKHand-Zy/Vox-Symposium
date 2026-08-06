@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any
 
 from vox_symposium.config import (
     FreezeOmniSettings,
@@ -22,92 +22,24 @@ from vox_symposium.providers import (
     provider_label,
 )
 
-if TYPE_CHECKING:
-    from vox_symposium.config import AgentConfig, Settings
 
-T = TypeVar("T")
-
-
-def build_model_from_settings(
-    settings: Settings,
-    agent: AgentConfig,
-    *,
-    evaluation_mode: bool = False,
-) -> RealtimeAudioModel:
-    provider = normalize_provider(agent.provider)
-    if provider == "openai":
-        config = _require_config(settings.openai, provider, agent.identity)
-        return _build_openai_model(
-            config,
-            agent.instructions,
-            evaluation_mode=evaluation_mode,
-        )
-    if provider == "gemini":
-        config = _require_config(settings.gemini, provider, agent.identity)
-        return _build_gemini_model(
-            config,
-            agent.instructions,
-            initial_history=agent.initial_history,
-            evaluation_mode=evaluation_mode,
-        )
-    if provider == "minicpm":
-        config = _require_config(settings.minicpm, provider, agent.identity)
-        return _build_minicpm_model(
-            config,
-            agent.instructions,
-            evaluation_mode=evaluation_mode,
-        )
-    if provider == "freeze_omni":
-        config = _require_config(settings.freeze_omni, provider, agent.identity)
-        return _build_freeze_omni_model(
-            config,
-            agent.instructions,
-            evaluation_mode=evaluation_mode,
-        )
-    if provider in MOSHI_PROTOCOL_PROVIDERS:
-        config = settings.moshi_protocols.get(provider)
-        if config is None:
-            raise RuntimeError(
-                f"{provider_label(provider)} realtime URL is required when a "
-                f"participant uses provider={provider}"
-            )
-        return _build_moshi_model(config, agent.instructions)
-    raise RuntimeError(f"Unsupported provider for {agent.identity}: {agent.provider}")
-
-
-def build_model_from_env(
+def build_evaluation_model_from_env(
     provider: str,
     instructions: str,
     *,
     initial_history: tuple[dict[str, Any], ...] = (),
-    evaluation_mode: bool = False,
 ) -> RealtimeAudioModel:
     provider = normalize_provider(provider)
     if provider == "openai":
-        return _build_openai_model(
-            load_openai_settings(),
-            instructions,
-            evaluation_mode=evaluation_mode,
-        )
+        return _build_openai_model(load_openai_settings(), instructions)
     if provider == "gemini":
         return _build_gemini_model(
-            load_gemini_settings(),
-            instructions,
-            initial_history=initial_history,
-            evaluation_mode=evaluation_mode,
+            load_gemini_settings(), instructions, initial_history=initial_history
         )
     if provider == "minicpm":
-        return _build_minicpm_model(
-            load_minicpm_settings(),
-            instructions,
-            evaluation_mode=evaluation_mode,
-        )
+        return _build_minicpm_model(load_minicpm_settings(), instructions)
     if provider == "freeze_omni":
-        return _build_freeze_omni_model(
-            load_freeze_omni_settings(),
-            instructions,
-            evaluation_mode=evaluation_mode,
-        )
+        return _build_freeze_omni_model(load_freeze_omni_settings(), instructions)
     if provider in MOSHI_PROTOCOL_PROVIDERS:
         config = load_moshi_settings(provider, required=True)
         if config is None:
@@ -118,12 +50,7 @@ def build_model_from_env(
     raise RuntimeError(f"Unsupported provider: {provider}")
 
 
-def _build_openai_model(
-    config: OpenAISettings,
-    instructions: str,
-    *,
-    evaluation_mode: bool,
-) -> RealtimeAudioModel:
+def _build_openai_model(config: OpenAISettings, instructions: str) -> RealtimeAudioModel:
     from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
 
     return OpenAIRealtimeModel(
@@ -137,7 +64,7 @@ def _build_openai_model(
         ping_interval=config.ping_interval,
         ping_timeout=config.ping_timeout,
         instructions=instructions,
-        manual_activity=evaluation_mode,
+        manual_activity=True,
     )
 
 
@@ -146,7 +73,6 @@ def _build_gemini_model(
     instructions: str,
     *,
     initial_history: tuple[dict[str, Any], ...],
-    evaluation_mode: bool,
 ) -> RealtimeAudioModel:
     from vox_symposium.models.gemini_live import GeminiLiveModel
 
@@ -165,16 +91,11 @@ def _build_gemini_model(
         thinking_budget=config.thinking_budget,
         enable_affective_dialog=config.enable_affective_dialog,
         initial_history=history,
-        manual_activity=evaluation_mode,
+        manual_activity=True,
     )
 
 
-def _build_minicpm_model(
-    config: MiniCPMSettings,
-    instructions: str,
-    *,
-    evaluation_mode: bool,
-) -> RealtimeAudioModel:
+def _build_minicpm_model(config: MiniCPMSettings, instructions: str) -> RealtimeAudioModel:
     from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
 
     return MiniCPMRealtimeModel(
@@ -186,16 +107,11 @@ def _build_minicpm_model(
         queue_timeout=config.queue_timeout,
         ping_interval=config.ping_interval,
         ping_timeout=config.ping_timeout,
-        evaluation_turn_taking=evaluation_mode,
+        evaluation_turn_taking=True,
     )
 
 
-def _build_freeze_omni_model(
-    config: FreezeOmniSettings,
-    instructions: str,
-    *,
-    evaluation_mode: bool,
-) -> RealtimeAudioModel:
+def _build_freeze_omni_model(config: FreezeOmniSettings, instructions: str) -> RealtimeAudioModel:
     from vox_symposium.models.freeze_omni import FreezeOmniRealtimeModel
 
     return FreezeOmniRealtimeModel(
@@ -215,7 +131,7 @@ def _build_freeze_omni_model(
         post_turn_idle_seconds=config.post_turn_idle_seconds,
         post_turn_poll_chunk_ms=config.post_turn_poll_chunk_ms,
         stop_recording_after_turn=config.stop_recording_after_turn,
-        evaluation_turn_taking=evaluation_mode,
+        evaluation_turn_taking=True,
     )
 
 
@@ -230,13 +146,3 @@ def _build_moshi_model(
         api_key=config.api_key,
         text_prompt=instructions,
     )
-
-
-def _require_config(
-    config: T | None,
-    provider: str,
-    identity: str,
-) -> T:
-    if config is None:
-        raise RuntimeError(f"{provider_label(provider)} configuration is required for {identity}")
-    return config
