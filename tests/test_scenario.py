@@ -14,6 +14,8 @@ from vox_symposium.scenario import (
     extract_answer_choice,
     load_scenarios,
     normalize_scenario,
+    other_agent,
+    validate_agent,
 )
 
 
@@ -47,15 +49,23 @@ class ScenarioTests(unittest.TestCase):
 
         self.assertEqual(extract_answer_choice("Skeptical but willing to listen", choices), "C")
 
+    def test_agent_helpers_validate_and_swap_two_roles(self) -> None:
+        self.assertEqual(validate_agent("human"), "human")
+        self.assertEqual(validate_agent("robot"), "robot")
+        self.assertEqual(other_agent("human"), "robot")
+        self.assertEqual(other_agent("robot"), "human")
+        with self.assertRaisesRegex(ValueError, "Unsupported scenario agent: observer"):
+            validate_agent("observer")
+
     def test_normalize_scenario_uses_last_turn_as_opening(self) -> None:
         scenario = normalize_scenario(
             {
                 "id": "case-1",
                 "row_id": "row-1",
-                "human": "Citizen",
-                "gpt": "Scholar",
-                "system": "Scholar; expert profile",
-                "character_1": "Citizen; practical profile",
+                "human": "Human",
+                "gpt": "Robot",
+                "system": "Robot; expert profile",
+                "character_1": "Human; practical profile",
                 "conversations": [
                     {"from": "human", "value": "Hello"},
                     {"from": "gpt", "value": "Hi there"},
@@ -72,6 +82,9 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(scenario["history"][0]["audio"], "audio/hello.wav")
         self.assertEqual(scenario["opening"]["audio"], "audio/opening.wav")
         self.assertEqual(scenario["run"]["dialogue_turns"], 3)
+        self.assertEqual(set(scenario["agents"]), {"human", "robot"})
+        self.assertEqual(scenario["opening"]["agent"], "robot")
+        self.assertEqual(scenario["evaluation"]["target_agent"], "robot")
         self.assertEqual(scenario["source"]["row_id"], "row-1")
 
     def test_normalize_scenario_rejects_unknown_conversation_roles(self) -> None:
@@ -83,14 +96,28 @@ class ScenarioTests(unittest.TestCase):
                 }
             )
 
+    def test_normalize_scenario_rejects_unknown_normalized_agent_keys(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "must define exactly these agents: human, robot",
+        ):
+            normalize_scenario(
+                {
+                    "id": "case-1",
+                    "agents": {"left": {}, "right": {}},
+                    "history": [],
+                    "evaluation": {},
+                }
+            )
+
     def test_agent_initial_history_uses_relative_roles_and_preserves_opening_playback(self) -> None:
         scenario = normalize_scenario(
             {
                 "id": "case-1",
-                "human": "Citizen",
-                "gpt": "Scholar",
-                "system": "Scholar; expert profile",
-                "character_1": "Citizen; practical profile",
+                "human": "Human",
+                "gpt": "Robot",
+                "system": "Robot; expert profile",
+                "character_1": "Human; practical profile",
                 "conversations": [
                     {"from": "human", "value": "Hello"},
                     {"from": "gpt", "value": "Opening that is played as audio"},
@@ -102,28 +129,28 @@ class ScenarioTests(unittest.TestCase):
             dialogue_turns=3,
         )
 
-        scholar_history = build_agent_initial_history(scenario, "scholar")
-        citizen_history = build_agent_initial_history(scenario, "citizen")
-        scholar_instructions = build_agent_instructions(scenario, "scholar", include_history=False)
-        citizen_instructions = build_agent_instructions(scenario, "citizen", include_history=False)
+        robot_history = build_agent_initial_history(scenario, "robot")
+        human_history = build_agent_initial_history(scenario, "human")
+        robot_instructions = build_agent_instructions(scenario, "robot", include_history=False)
+        human_instructions = build_agent_instructions(scenario, "human", include_history=False)
 
-        self.assertIn("You are Scholar.", scholar_instructions)
-        self.assertIn("You are Citizen.", citizen_instructions)
-        self.assertNotIn("Prior conversation history", scholar_instructions)
-        self.assertNotIn("Hello", scholar_instructions)
-        self.assertNotIn("Opening that is played as audio", scholar_instructions)
+        self.assertIn("You are Robot.", robot_instructions)
+        self.assertIn("You are Human.", human_instructions)
+        self.assertNotIn("Prior conversation history", robot_instructions)
+        self.assertNotIn("Hello", robot_instructions)
+        self.assertNotIn("Opening that is played as audio", robot_instructions)
         self.assertEqual(
-            scholar_history,
+            robot_history,
             (
                 {"role": "user", "parts": [{"text": "Hello"}]},
                 {"role": "model", "parts": [{"text": "Opening that is played as audio"}]},
             ),
         )
         self.assertEqual(
-            citizen_history,
+            human_history,
             ({"role": "model", "parts": [{"text": "Hello"}]},),
         )
-        for instructions in (scholar_instructions, citizen_instructions):
+        for instructions in (robot_instructions, human_instructions):
             self.assertIn("Dialogue behavior:", instructions)
             self.assertIn("Stay in character and respond with the speaking style", instructions)
             self.assertIn("Each response should leave a natural opening", instructions)
@@ -132,18 +159,18 @@ class ScenarioTests(unittest.TestCase):
             self.assertNotIn("evaluation", instructions.lower())
             self.assertNotIn("voice model being evaluated", instructions)
 
-    def test_agent_initial_history_includes_a_citizen_opening_only_for_citizen(self) -> None:
+    def test_agent_initial_history_includes_a_human_opening_only_for_human(self) -> None:
         scenario = normalize_scenario(
             {
                 "id": "case-1",
-                "human": "Citizen",
-                "gpt": "Scholar",
-                "system": "Scholar; expert profile",
-                "character_1": "Citizen; practical profile",
+                "human": "Human",
+                "gpt": "Robot",
+                "system": "Robot; expert profile",
+                "character_1": "Human; practical profile",
                 "conversations": [
                     {"from": "human", "value": "Hello"},
                     {"from": "gpt", "value": "Hi there"},
-                    {"from": "human", "value": "Citizen opening that is played as audio"},
+                    {"from": "human", "value": "Human opening that is played as audio"},
                 ],
                 "question": "Question?",
                 "multichoice": ["A. Yes", "B. No"],
@@ -152,19 +179,19 @@ class ScenarioTests(unittest.TestCase):
             dialogue_turns=3,
         )
 
-        citizen_history = build_agent_initial_history(scenario, "citizen")
-        scholar_history = build_agent_initial_history(scenario, "scholar")
+        human_history = build_agent_initial_history(scenario, "human")
+        robot_history = build_agent_initial_history(scenario, "robot")
 
         self.assertEqual(
-            citizen_history,
+            human_history,
             (
                 {"role": "model", "parts": [{"text": "Hello"}]},
                 {"role": "user", "parts": [{"text": "Hi there"}]},
-                {"role": "model", "parts": [{"text": "Citizen opening that is played as audio"}]},
+                {"role": "model", "parts": [{"text": "Human opening that is played as audio"}]},
             ),
         )
         self.assertEqual(
-            scholar_history,
+            robot_history,
             (
                 {"role": "user", "parts": [{"text": "Hello"}]},
                 {"role": "model", "parts": [{"text": "Hi there"}]},
@@ -175,10 +202,10 @@ class ScenarioTests(unittest.TestCase):
         scenario = normalize_scenario(
             {
                 "id": "case-1",
-                "human": "Citizen",
-                "gpt": "Scholar",
-                "system": "Scholar; expert profile",
-                "character_1": "Citizen; practical profile",
+                "human": "Human",
+                "gpt": "Robot",
+                "system": "Robot; expert profile",
+                "character_1": "Human; practical profile",
                 "conversations": [
                     {"from": "human", "value": "Hello"},
                     {"from": "gpt", "value": "Opening"},
@@ -190,23 +217,23 @@ class ScenarioTests(unittest.TestCase):
             dialogue_turns=3,
         )
 
-        scholar_instructions = build_agent_instructions(scenario, "scholar")
-        citizen_instructions = build_agent_instructions(scenario, "citizen")
+        robot_instructions = build_agent_instructions(scenario, "robot")
+        human_instructions = build_agent_instructions(scenario, "human")
 
-        self.assertIn("Prior conversation history:", scholar_instructions)
-        self.assertIn("- Citizen: Hello", scholar_instructions)
-        self.assertIn("- Scholar: Opening", scholar_instructions)
-        self.assertIn("- Citizen: Hello", citizen_instructions)
-        self.assertNotIn("- Scholar: Opening", citizen_instructions)
+        self.assertIn("Prior conversation history:", robot_instructions)
+        self.assertIn("- Human: Hello", robot_instructions)
+        self.assertIn("- Robot: Opening", robot_instructions)
+        self.assertIn("- Human: Hello", human_instructions)
+        self.assertNotIn("- Robot: Opening", human_instructions)
 
     def test_agent_instructions_can_append_provider_dialogue_behavior(self) -> None:
         scenario = normalize_scenario(
             {
                 "id": "case-1",
-                "human": "Citizen",
-                "gpt": "Scholar",
-                "system": "Scholar; expert profile",
-                "character_1": "Citizen; practical profile",
+                "human": "Human",
+                "gpt": "Robot",
+                "system": "Robot; expert profile",
+                "character_1": "Human; practical profile",
                 "conversations": [{"from": "gpt", "value": "Opening"}],
                 "question": "Question?",
                 "multichoice": ["A. Yes", "B. No"],
@@ -215,29 +242,29 @@ class ScenarioTests(unittest.TestCase):
             dialogue_turns=3,
         )
 
-        scholar_instructions = build_agent_instructions(
+        robot_instructions = build_agent_instructions(
             scenario,
-            "scholar",
+            "robot",
             dialogue_behavior_extra=MINICPM_DIALOGUE_BEHAVIOR,
         )
-        citizen_instructions = build_agent_instructions(scenario, "citizen")
+        human_instructions = build_agent_instructions(scenario, "human")
 
-        self.assertIn("Dialogue behavior:", scholar_instructions)
-        self.assertIn(MINICPM_DIALOGUE_BEHAVIOR, scholar_instructions)
+        self.assertIn("Dialogue behavior:", robot_instructions)
+        self.assertIn(MINICPM_DIALOGUE_BEHAVIOR, robot_instructions)
         self.assertLess(
-            scholar_instructions.index("Dialogue behavior:"),
-            scholar_instructions.index(MINICPM_DIALOGUE_BEHAVIOR),
+            robot_instructions.index("Dialogue behavior:"),
+            robot_instructions.index(MINICPM_DIALOGUE_BEHAVIOR),
         )
-        self.assertNotIn(MINICPM_DIALOGUE_BEHAVIOR, citizen_instructions)
+        self.assertNotIn(MINICPM_DIALOGUE_BEHAVIOR, human_instructions)
 
     def test_freeze_omni_prompt_adds_short_reply_behavior(self) -> None:
         scenario = normalize_scenario(
             {
                 "id": "case-1",
-                "human": "Citizen",
-                "gpt": "Scholar",
-                "system": "Scholar; expert profile",
-                "character_1": "Citizen; practical profile",
+                "human": "Human",
+                "gpt": "Robot",
+                "system": "Robot; expert profile",
+                "character_1": "Human; practical profile",
                 "conversations": [{"from": "gpt", "value": "Opening"}],
                 "question": "Question?",
                 "multichoice": ["A. Yes", "B. No"],
@@ -247,19 +274,19 @@ class ScenarioTests(unittest.TestCase):
         )
 
         loaded = LoadedScenario(scenario)
-        scholar_prompt = loaded.build_prompt(
-            "scholar",
+        robot_prompt = loaded.build_prompt(
+            "robot",
             provider="freeze-omni",
             use_structured_history=False,
         )
-        citizen_prompt = loaded.build_prompt(
-            "citizen",
+        human_prompt = loaded.build_prompt(
+            "human",
             provider="gemini",
             use_structured_history=False,
         )
 
-        self.assertIn(FREEZE_OMNI_DIALOGUE_BEHAVIOR, scholar_prompt.instructions)
-        self.assertNotIn(FREEZE_OMNI_DIALOGUE_BEHAVIOR, citizen_prompt.instructions)
+        self.assertIn(FREEZE_OMNI_DIALOGUE_BEHAVIOR, robot_prompt.instructions)
+        self.assertNotIn(FREEZE_OMNI_DIALOGUE_BEHAVIOR, human_prompt.instructions)
 
 
 if __name__ == "__main__":

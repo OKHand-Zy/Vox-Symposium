@@ -300,11 +300,11 @@ cd /path/to/Vox-Symposium
 python -m pip install -r requirements.txt
 ```
 
-`.env` 範例，先只讓 Scholar 使用 MiniCPM；Citizen 使用 Gemini：
+`.env` 範例，先只讓 Robot 使用 MiniCPM；Human 使用 Gemini：
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
-AGENT_SCHOLAR_PROVIDER=minicpm
+AGENT_HUMAN_PROVIDER=gemini
+AGENT_ROBOT_PROVIDER=minicpm
 
 GEMINI_API_KEY=your_gemini_api_key
 
@@ -324,7 +324,7 @@ MINICPM_PING_TIMEOUT=none
 MINICPM_API_KEY=your_minicpm_api_key
 ```
 
-第一輪不建議 Citizen、Scholar 同時使用 MiniCPM；兩個同時存在的 full-duplex session
+第一輪不建議 Human、Robot 同時使用 MiniCPM；兩個同時存在的 full-duplex session
 通常需要兩個 Worker。
 
 ## 11. Smoke test
@@ -348,17 +348,17 @@ python -m vox_symposium.evaluation \
 ```text
 data/results/00000000-minicpm-smoke.json
 data/results/00000000-minicpm-smoke-artifacts/
-  dialogue-01-citizen.wav
-  dialogue-02-scholar.wav
-  scholar-answer.wav
+  dialogue-01-human.wav
+  dialogue-02-robot.wav
+  robot-answer.wav
   dialogue-log.json
 ```
 
 macOS 可播放結果：
 
 ```bash
-afplay data/results/00000000-minicpm-smoke-artifacts/dialogue-02-scholar.wav
-afplay data/results/00000000-minicpm-smoke-artifacts/scholar-answer.wav
+afplay data/results/00000000-minicpm-smoke-artifacts/dialogue-02-robot.wav
+afplay data/results/00000000-minicpm-smoke-artifacts/robot-answer.wav
 ```
 
 ## 12. Full-Duplex 行為注意事項

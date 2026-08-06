@@ -16,6 +16,7 @@ from vox_symposium.config import gemini_live_model
 from vox_symposium.env import env_with_legacy, normalized_env
 from vox_symposium.json_io import read_json, write_json
 from vox_symposium.providers import normalize_provider
+from vox_symposium.scenario import AGENT_KEYS, HUMAN_AGENT, AgentKey, validate_agent
 
 
 @dataclass(frozen=True)
@@ -259,7 +260,7 @@ def write_run_env_snapshot(
         "",
     ]
 
-    for agent in ("citizen", "scholar"):
+    for agent in AGENT_KEYS:
         lines.extend(_agent_env_snapshot(agent))
         lines.append("")
 
@@ -268,8 +269,9 @@ def write_run_env_snapshot(
     print(f"Saved environment snapshot: {path}")
 
 
-def _agent_env_snapshot(agent: str) -> list[str]:
-    legacy_agent = "A" if agent == "citizen" else "B"
+def _agent_env_snapshot(agent: AgentKey) -> list[str]:
+    agent = validate_agent(agent)
+    legacy_agent = "A" if agent == HUMAN_AGENT else "B"
     prefix = f"AGENT_{agent.upper()}"
     provider = normalize_provider(
         env_with_legacy(
@@ -501,5 +503,6 @@ def _redacted_url(value: str) -> str:
     return urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
 
 
-def _default_provider(agent: str) -> str:
-    return "openai" if agent == "citizen" else "gemini"
+def _default_provider(agent: AgentKey) -> str:
+    agent = validate_agent(agent)
+    return "openai" if agent == HUMAN_AGENT else "gemini"

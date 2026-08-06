@@ -68,9 +68,15 @@ from vox_symposium.models.factory import build_evaluation_model_from_env
 from vox_symposium.providers import normalize_provider
 from vox_symposium.recording import audio_event_fields, write_wav
 from vox_symposium.scenario import (
+    AGENT_KEYS,
+    HUMAN_AGENT,
+    ROBOT_AGENT,
+    AgentKey,
     LoadedScenario,
     build_evaluation_result,
     load_scenarios,
+    other_agent,
+    validate_agent,
     write_evaluation_result,
 )
 
@@ -288,37 +294,29 @@ async def _run_scenario_evaluation(
     artifact_dir = _scenario_artifact_dir(artifact_root, scenario.data)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    citizen_provider = _agent_provider("citizen")
-    scholar_provider = _agent_provider("scholar")
-    citizen_prompt = scenario.build_prompt(
-        "citizen",
-        provider=citizen_provider,
-        use_structured_history=provider_uses_structured_history(citizen_provider),
-    )
-    scholar_prompt = scenario.build_prompt(
-        "scholar",
-        provider=scholar_provider,
-        use_structured_history=provider_uses_structured_history(scholar_provider),
-    )
-    citizen = _build_model(
-        "citizen",
-        citizen_prompt.instructions,
-        initial_history=citizen_prompt.initial_history,
-    )
-    scholar = _build_model(
-        "scholar",
-        scholar_prompt.instructions,
-        initial_history=scholar_prompt.initial_history,
-    )
-    models = {"citizen": citizen, "scholar": scholar}
-
-    audio_queues: dict[str, asyncio.Queue[PcmAudio | None]] = {
-        "citizen": asyncio.Queue(),
-        "scholar": asyncio.Queue(),
+    providers = {agent: _agent_provider(agent) for agent in AGENT_KEYS}
+    prompts = {
+        agent: scenario.build_prompt(
+            agent,
+            provider=providers[agent],
+            use_structured_history=provider_uses_structured_history(providers[agent]),
+        )
+        for agent in AGENT_KEYS
     }
-    text_queues: dict[str, asyncio.Queue[str | None]] = {
-        "citizen": asyncio.Queue(),
-        "scholar": asyncio.Queue(),
+    models = {
+        agent: _build_model(
+            agent,
+            prompts[agent].instructions,
+            initial_history=prompts[agent].initial_history,
+        )
+        for agent in AGENT_KEYS
+    }
+
+    audio_queues: dict[AgentKey, asyncio.Queue[PcmAudio | None]] = {
+        agent: asyncio.Queue() for agent in AGENT_KEYS
+    }
+    text_queues: dict[AgentKey, asyncio.Queue[str | None]] = {
+        agent: asyncio.Queue() for agent in AGENT_KEYS
     }
     reader_tasks: list[asyncio.Task[None]] = []
     dialogue_log: dict[str, Any] = {
@@ -328,7 +326,7 @@ async def _run_scenario_evaluation(
     }
 
     try:
-        await asyncio.gather(citizen.connect(), scholar.connect())
+        await asyncio.gather(*(model.connect() for model in models.values()))
         for agent, model in models.items():
             reader_tasks.append(
                 asyncio.create_task(_read_audio(model, audio_queues[agent]), name=f"{agent}-audio")
@@ -345,7 +343,7 @@ async def _run_scenario_evaluation(
             audio_speed=args.audio_speed,
             dialogue_log=dialogue_log,
         )
-        scholar_turns = await _run_dialogue_turns(
+        robot_turns = await _run_dialogue_turns(
             models,
             audio_queues,
             text_queues,
@@ -361,8 +359,8 @@ async def _run_scenario_evaluation(
             audio_speed=args.audio_speed,
         )
 
-        _drain_queue(text_queues["scholar"])
-        _drain_queue(audio_queues["scholar"])
+        _drain_queue(text_queues[ROBOT_AGENT])
+        _drain_queue(audio_queues[ROBOT_AGENT])
         question_audio = _question_audio(
             scenario.data,
             question_audio_override=args.question_audio,
@@ -373,40 +371,45 @@ async def _run_scenario_evaluation(
         dialogue_log["events"].append(
             {
                 "type": "evaluation_question",
-                "target_agent": "scholar",
+                "target_agent": ROBOT_AGENT,
                 "audio": str(question_audio),
-                "after_scholar_turns": scholar_turns,
+                "after_robot_turns": robot_turns,
             }
         )
-        print(f"Playing evaluation question into scholar: {question_audio}")
+        print(f"Playing evaluation question into {ROBOT_AGENT}: {question_audio}")
         await _send_audio_file(
-            question_audio, scholar, frame_ms=args.frame_ms, audio_speed=args.audio_speed
+            question_audio,
+            models[ROBOT_AGENT],
+            frame_ms=args.frame_ms,
+            audio_speed=args.audio_speed,
         )
 
         answer = await _collect_utterance(
-            "scholar",
-            audio_queues["scholar"],
+            ROBOT_AGENT,
+            audio_queues[ROBOT_AGENT],
             idle_timeout=args.idle_timeout,
             max_seconds=args.max_utterance_seconds,
         )
         answer_audio = (
-            Path(args.answer_audio) if args.answer_audio else artifact_dir / "scholar-answer.wav"
+            Path(args.answer_audio)
+            if args.answer_audio
+            else artifact_dir / f"{ROBOT_AGENT}-answer.wav"
         )
         answer_recording = write_wav(answer_audio, answer.audio)
         answer_text = await _collect_text_after_audio(
-            text_queues["scholar"],
+            text_queues[ROBOT_AGENT],
             idle_timeout=args.text_idle_timeout,
             max_wait=args.text_max_wait,
         )
         dialogue_log["events"].append(
             {
                 "type": "evaluation_answer",
-                "agent": "scholar",
+                "agent": ROBOT_AGENT,
                 "text": answer_text,
                 **audio_event_fields(answer_recording),
             }
         )
-        print(f"Captured scholar answer evaluation question: {answer_audio}")
+        print(f"Captured {ROBOT_AGENT} answer evaluation question: {answer_audio}")
 
         dialogue_log_path = artifact_dir / "dialogue-log.json"
         write_json(dialogue_log_path, dialogue_log)
@@ -430,7 +433,9 @@ async def _run_scenario_evaluation(
     finally:
         for task in reader_tasks:
             task.cancel()
-        await asyncio.gather(citizen.close(), scholar.close(), return_exceptions=True)
+        await asyncio.gather(
+            *(model.close() for model in models.values()), return_exceptions=True
+        )
         if reader_tasks:
             await asyncio.gather(*reader_tasks, return_exceptions=True)
 
@@ -448,19 +453,19 @@ def main() -> None:
 
 async def _play_opening(
     scenario: dict[str, Any],
-    models: dict[str, RealtimeAudioModel],
+    models: dict[AgentKey, RealtimeAudioModel],
     *,
     artifact_dir: Path,
     frame_ms: int,
     audio_speed: float,
     dialogue_log: dict[str, Any],
-) -> str:
+) -> AgentKey:
     opening = scenario.get("opening")
     if not opening:
-        return "citizen"
+        return HUMAN_AGENT
 
-    opening_agent = opening["agent"]
-    receiver = _other_agent(opening_agent)
+    opening_agent = validate_agent(str(opening["agent"]))
+    receiver = other_agent(opening_agent)
     opening_audio = _turn_audio(opening)
     dialogue_log["events"].append(
         {
@@ -479,13 +484,13 @@ async def _play_opening(
 
 
 async def _run_dialogue_turns(
-    models: dict[str, RealtimeAudioModel],
-    audio_queues: dict[str, asyncio.Queue[PcmAudio | None]],
-    text_queues: dict[str, asyncio.Queue[str | None]],
+    models: dict[AgentKey, RealtimeAudioModel],
+    audio_queues: dict[AgentKey, asyncio.Queue[PcmAudio | None]],
+    text_queues: dict[AgentKey, asyncio.Queue[str | None]],
     *,
     dialogue_log: dict[str, Any],
     artifact_dir: Path,
-    start_agent: str,
+    start_agent: AgentKey,
     target_turns: int,
     idle_timeout: float,
     max_utterance_seconds: float,
@@ -495,11 +500,11 @@ async def _run_dialogue_turns(
     audio_speed: float,
 ) -> int:
     current_agent = start_agent
-    scholar_turns = 0
+    robot_turns = 0
     event_index = 0
-    turn_counts = {"citizen": 0, "scholar": 0}
+    turn_counts = {agent: 0 for agent in AGENT_KEYS}
 
-    while scholar_turns < target_turns:
+    while robot_turns < target_turns:
         utterance = await _collect_utterance(
             current_agent,
             audio_queues[current_agent],
@@ -509,8 +514,8 @@ async def _run_dialogue_turns(
         event_index += 1
         turn_counts[current_agent] += 1
         turn_index = turn_counts[current_agent]
-        if current_agent == "scholar":
-            scholar_turns += 1
+        if current_agent == ROBOT_AGENT:
+            robot_turns += 1
         utterance_path = artifact_dir / f"dialogue-{event_index:02d}-{current_agent}.wav"
         recording = write_wav(utterance_path, utterance.audio)
         text = await _collect_text_after_audio(
@@ -523,28 +528,28 @@ async def _run_dialogue_turns(
                 "type": "dialogue_turn",
                 "agent": current_agent,
                 "turn_index": turn_index,
-                "scholar_turns": scholar_turns,
+                "robot_turns": robot_turns,
                 "text": text,
                 **audio_event_fields(recording),
             }
         )
         print(_format_dialogue_capture(current_agent, turn_index, text))
 
-        if current_agent == "scholar" and scholar_turns >= target_turns:
+        if current_agent == ROBOT_AGENT and robot_turns >= target_turns:
             break
 
-        receiver = _other_agent(current_agent)
+        receiver = other_agent(current_agent)
         _drain_queue(text_queues[receiver])
         await _send_audio(
             utterance.audio, models[receiver], frame_ms=frame_ms, audio_speed=audio_speed
         )
         current_agent = receiver
 
-    return scholar_turns
+    return robot_turns
 
 
-def _format_dialogue_capture(agent: str, turn_index: int, text: str = "") -> str:
-    turn_word = "turns" if agent == "scholar" else "turn"
+def _format_dialogue_capture(agent: AgentKey, turn_index: int, text: str = "") -> str:
+    turn_word = "turns" if agent == ROBOT_AGENT else "turn"
     message = f"Captured {agent} {turn_word} {turn_index}"
     if text:
         return f"{message}: {text}"
@@ -552,7 +557,7 @@ def _format_dialogue_capture(agent: str, turn_index: int, text: str = "") -> str
 
 
 def _build_model(
-    agent: str,
+    agent: AgentKey,
     instructions: str,
     *,
     initial_history: tuple[dict[str, Any], ...] = (),
@@ -564,11 +569,12 @@ def _build_model(
     )
 
 
-def _agent_provider(agent: str) -> str:
+def _agent_provider(agent: AgentKey) -> str:
+    agent = validate_agent(agent)
     return normalize_provider(
         env_with_legacy(
             f"AGENT_{agent.upper()}_PROVIDER",
-            f"AGENT_{'A' if agent == 'citizen' else 'B'}_PROVIDER",
+            f"AGENT_{'A' if agent == HUMAN_AGENT else 'B'}_PROVIDER",
             default=_default_provider(agent),
         )
     )
@@ -609,12 +615,9 @@ def _drain_queue(queue: asyncio.Queue[Any]) -> None:
             return
 
 
-def _other_agent(agent: str) -> str:
-    return "scholar" if agent == "citizen" else "citizen"
-
-
-def _default_provider(agent: str) -> str:
-    return "openai" if agent == "citizen" else "gemini"
+def _default_provider(agent: AgentKey) -> str:
+    agent = validate_agent(agent)
+    return "openai" if agent == HUMAN_AGENT else "gemini"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -640,13 +643,13 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--audio-dir", help="Directory containing original speech wav files.")
     parser.add_argument(
-        "--dialogue-turns", type=int, default=5, help="Scholar turns before evaluation."
+        "--dialogue-turns", type=int, default=5, help="Robot turns before evaluation."
     )
     parser.add_argument(
         "--question-audio",
         help="Evaluation question wav file. Overrides scenario evaluation.question_audio.",
     )
-    parser.add_argument("--answer-audio", help="Where to save the evaluated scholar answer wav.")
+    parser.add_argument("--answer-audio", help="Where to save the evaluated robot answer wav.")
     parser.add_argument(
         "--artifact-dir", help="Directory for dialogue logs and captured wav files."
     )

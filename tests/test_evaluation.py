@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from vox_symposium.evaluation import (
+    _agent_provider,
     _format_dialogue_capture,
     _limit_scenarios,
     _load_resume_results,
@@ -25,6 +28,18 @@ from vox_symposium.scenario import LoadedScenario
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_agent_provider_uses_human_and_robot_environment_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "AGENT_HUMAN_PROVIDER": "gemini",
+                "AGENT_ROBOT_PROVIDER": "openai",
+            },
+            clear=True,
+        ):
+            self.assertEqual(_agent_provider("human"), "gemini")
+            self.assertEqual(_agent_provider("robot"), "openai")
+
     def test_validate_args_rejects_non_positive_frame_duration(self) -> None:
         args = argparse.Namespace(
             start_index=0,
@@ -46,16 +61,16 @@ class EvaluationTests(unittest.TestCase):
 
     def test_format_dialogue_capture_labels_role_turn_counts(self) -> None:
         self.assertEqual(
-            _format_dialogue_capture("citizen", 1),
-            "Captured citizen turn 1",
+            _format_dialogue_capture("human", 1),
+            "Captured human turn 1",
         )
         self.assertEqual(
-            _format_dialogue_capture("citizen", 1, "hello"),
-            "Captured citizen turn 1: hello",
+            _format_dialogue_capture("human", 1, "hello"),
+            "Captured human turn 1: hello",
         )
         self.assertEqual(
-            _format_dialogue_capture("scholar", 1, "hi"),
-            "Captured scholar turns 1: hi",
+            _format_dialogue_capture("robot", 1, "hi"),
+            "Captured robot turns 1: hi",
         )
 
     def test_scenario_artifact_dir_uses_source_row_id(self) -> None:

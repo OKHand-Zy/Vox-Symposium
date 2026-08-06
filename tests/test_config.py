@@ -84,10 +84,10 @@ class ConfigTests(unittest.TestCase):
     def test_scenario_history_uses_initial_content_only_for_gemini_3(self) -> None:
         scenario = {
             "id": "case-1",
-            "human": "Citizen",
-            "gpt": "Scholar",
-            "system": "Scholar; expert profile",
-            "character_1": "Citizen; practical profile",
+            "human": "Human",
+            "gpt": "Robot",
+            "system": "Robot; expert profile",
+            "character_1": "Human; practical profile",
             "conversations": [
                 {"from": "human", "value": "Hello"},
                 {"from": "gpt", "value": "Opening"},
@@ -102,7 +102,7 @@ class ConfigTests(unittest.TestCase):
             clear=True,
         ):
             prompt_2_5 = loaded.build_prompt(
-                "scholar",
+                "robot",
                 provider="gemini",
                 use_structured_history=provider_uses_structured_history("gemini"),
             )
@@ -114,7 +114,7 @@ class ConfigTests(unittest.TestCase):
             clear=True,
         ):
             prompt_3_1 = loaded.build_prompt(
-                "scholar",
+                "robot",
                 provider="gemini",
                 use_structured_history=provider_uses_structured_history("gemini"),
             )

@@ -25,7 +25,7 @@ Vox 只透過 Socket.IO 送入音訊與接收音訊，不會在主流程載入 F
 基本設定：
 
 ```env
-AGENT_SCHOLAR_PROVIDER=freeze_omni
+AGENT_ROBOT_PROVIDER=freeze_omni
 FREEZE_OMNI_REALTIME_URL=https://127.0.0.1:8081
 FREEZE_OMNI_SSL_VERIFY=false
 ```
@@ -49,7 +49,7 @@ turn 前靜音、
 啟動 Moshi-compatible server 後，設定：
 
 ```env
-AGENT_SCHOLAR_PROVIDER=moshi
+AGENT_ROBOT_PROVIDER=moshi
 MOSHI_REALTIME_URL=ws://127.0.0.1:8998/api/chat
 ```
 

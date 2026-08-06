@@ -23,10 +23,10 @@ scenario / dataset
 
 ## 角色定義
 
-- Agent-Citizen：代表人類使用者，用來模擬一般人對 Voice Agent 的提問、追問與互動。
-- Agent-Scholar：代表被測試的 Voice Agent，也就是你要觀察、驗證與調整的目標代理。
+- Agent-Human：代表人類使用者，用來模擬一般人對 Voice Agent 的提問、追問與互動。
+- Agent-Robot：代表被測試的 Voice Agent，也就是你要觀察、驗證與調整的目標代理。
 
-Agent-Citizen 和 Agent-Scholar 都可以自行設定使用 OpenAI Realtime、Gemini Live、MiniCPM-o 4.5、Freeze-Omni、Moshi 或 PersonaPlex。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions；但 Kyutai 官方 Moshi server 不會套用 per-session instructions，細節見下方 Moshi 限制說明。
+Agent-Human 和 Agent-Robot 都可以自行設定使用 OpenAI Realtime、Gemini Live、MiniCPM-o 4.5、Freeze-Omni、Moshi 或 PersonaPlex。你可以在 `.env` 裡分別調整兩個角色的 provider、model 和 instructions；但 Kyutai 官方 Moshi server 不會套用 per-session instructions，細節見下方 Moshi 限制說明。
 
 ## 重要資料位置
 
@@ -58,8 +58,8 @@ data/
 
 資料集欄位固定映射：
 
-- `human` -> Agent-Citizen，模擬對話對象
-- `gpt` / `system` -> Agent-Scholar，被測語音模型
+- `human` -> Agent-Human，模擬對話對象
+- `gpt` / `system` -> Agent-Robot，被測語音模型
 - `conversations[:-1]` -> 歷史對話，放進 prompt
 - `conversations[-1]` -> 開場白，評測開始時自動播放
 - `type` / `subtype` / `topic` / `goal` -> 場景設定
@@ -75,8 +75,8 @@ pip install -r requirements.txt
 `.env` 範例，兩邊都使用 Gemini：
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
-AGENT_SCHOLAR_PROVIDER=gemini
+AGENT_HUMAN_PROVIDER=gemini
+AGENT_ROBOT_PROVIDER=gemini
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_LIVE_THINKING_LEVEL=minimal
 ```
@@ -86,8 +86,8 @@ GEMINI_LIVE_THINKING_LEVEL=minimal
 也可以改用 Vertex AI 與 service account JSON 金鑰：
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
-AGENT_SCHOLAR_PROVIDER=gemini
+AGENT_HUMAN_PROVIDER=gemini
+AGENT_ROBOT_PROVIDER=gemini
 GEMINI_BACKEND=vertex
 GOOGLE_CLOUD_PROJECT=your-google-cloud-project
 GOOGLE_CLOUD_LOCATION=us-central1
@@ -127,6 +127,8 @@ vox-symposium-scenario data/two_test.json data/scenarios/two_test.normalized.jso
 vox-symposium-scenario data/two_test.json data/scenarios/00000000.json --id 00000000 --audio-dir data/test
 ```
 
+角色鍵已統一為 `human` / `robot`，`evaluation.target_agent` 也固定指向 `robot`。如果手上已有舊版 normalized scenario，請重新執行轉換器產生新版 scenario JSON。
+
 已轉好的 scenario 主要包含：
 
 ```json
@@ -134,7 +136,7 @@ vox-symposium-scenario data/two_test.json data/scenarios/00000000.json --id 0000
   "id": "00000000",
   "history": [],
   "opening": {
-    "agent": "scholar",
+    "agent": "robot",
     "audio": "data/test/instruct_00000000_9.wav"
   },
   "run": {
@@ -173,7 +175,7 @@ runner 會自動用 `ffmpeg` 把 MP3 轉成 24 kHz mono PCM WAV 後送給模型�
 
 **4. 跑 smoke test**
 
-先跑 2 次 scholar 回覆，確認整條流程能完成：
+先跑 2 次 robot 回覆，確認整條流程能完成：
 
 ```bash
 python3 -m vox_symposium.evaluation \
@@ -186,19 +188,19 @@ python3 -m vox_symposium.evaluation \
 成功後會輸出類似：
 
 ```text
-Playing opening from scholar into citizen: data/test/instruct_00000000_9.wav
-Captured citizen turn 1: ...
-Captured scholar turns 1: ...
-Captured citizen turn 2: ...
-Captured scholar turns 2: ...
-Playing evaluation question into scholar: data/question_audio/two_test/question_00000000.wav
-Captured scholar answer evaluation question: data/results/00000000-smoke-artifacts/00000000/scholar-answer.wav
+Playing opening from robot into human: data/test/instruct_00000000_9.wav
+Captured human turn 1: ...
+Captured robot turns 1: ...
+Captured human turn 2: ...
+Captured robot turns 2: ...
+Playing evaluation question into robot: data/question_audio/two_test/question_00000000.wav
+Captured robot answer evaluation question: data/results/00000000-smoke-artifacts/00000000/robot-answer.wav
 Saved evaluation result: data/results/00000000-smoke.json (...)
 ```
 
 **5. 跑完整評測**
 
-預設是 5 次 scholar 回覆後播放題目：
+預設是 5 次 robot 回覆後播放題目：
 
 ```bash
 python3 -m vox_symposium.evaluation \
@@ -246,11 +248,11 @@ data/results/00000000-auto001.json
 data/results/00000000-auto001-artifacts/
   run-env.txt
   00000000/
-    dialogue-01-citizen.wav
-    dialogue-02-scholar.wav
+    dialogue-01-human.wav
+    dialogue-02-robot.wav
     ...
     question.wav
-    scholar-answer.wav
+    robot-answer.wav
     dialogue-log.json
 ```
 
@@ -272,7 +274,7 @@ result 會保存：
   },
   "response": {
     "text": "",
-    "audio": "data/results/00000000-auto001-artifacts/00000000/scholar-answer.wav",
+    "audio": "data/results/00000000-auto001-artifacts/00000000/robot-answer.wav",
     "choice": null,
     "is_correct": null
   },
@@ -283,7 +285,7 @@ result 會保存：
 }
 ```
 
-如果 provider 回傳 output transcript，runner 會自動從最後回答抽取 `A/B/C/D` 並填入 `choice` / `is_correct`。如果沒有 transcript，仍會保存 `scholar-answer.wav`；你可以轉寫後用 `save-result` 補文字答案。
+如果 provider 回傳 output transcript，runner 會自動從最後回答抽取 `A/B/C/D` 並填入 `choice` / `is_correct`。如果沒有 transcript，仍會保存 `robot-answer.wav`；你可以轉寫後用 `save-result` 補文字答案。
 
 **7. 手動保存或覆蓋最後答案**
 
@@ -314,7 +316,7 @@ vox-symposium-scenario save-result \
 - `Both GOOGLE_API_KEY and GEMINI_API_KEY are set`：Google SDK 提示會使用 `GOOGLE_API_KEY`。這不是錯誤；若不想使用它，請 unset `GOOGLE_API_KEY`。
 - `Question audio does not exist`：確認 `evaluation.question_audio` 指向的檔案存在。若 JSON 寫 `"question_00000000.mp3"`，檔案可放在 `data/question/question_00000000.mp3`。
 - `ConnectionClosedError` 或 keepalive ping timeout：OpenAI Realtime 先在 `.env` 設 `OPENAI_REALTIME_PING_TIMEOUT=120`；若是大量 batch，再用 `--dialogue-turns 2` 做 smoke test，完整評測可顯式加 `--audio-speed 8` 或 `--audio-speed 16`，並確保角色回覆不要太長。
-- `choice` 是 `null`：provider 沒回傳 transcript。先聽 `scholar-answer.wav` 或用 STT 轉寫，再用 `save-result` 保存文字答案。
+- `choice` 是 `null`：provider 沒回傳 transcript。先聽 `robot-answer.wav` 或用 STT 轉寫，再用 `save-result` 保存文字答案。
 
 ## 安裝
 
@@ -348,16 +350,16 @@ Gemini 預設使用 AI Studio，因此需要 `GEMINI_API_KEY`。若要使用 Ver
 主要角色設定：
 
 ```env
-AGENT_CITIZEN_IDENTITY=agent-citizen
-AGENT_CITIZEN_PROVIDER=openai
-AGENT_CITIZEN_INSTRUCTIONS=You are Agent-Citizen, representing a human user. Keep replies concise and conversational.
+AGENT_HUMAN_IDENTITY=agent-human
+AGENT_HUMAN_PROVIDER=openai
+AGENT_HUMAN_INSTRUCTIONS=You are Agent-Human, representing a human user. Keep replies concise and conversational.
 
-AGENT_SCHOLAR_IDENTITY=agent-scholar
-AGENT_SCHOLAR_PROVIDER=gemini
-AGENT_SCHOLAR_INSTRUCTIONS=You are Agent-Scholar, the voice agent under test. Keep replies concise and conversational.
+AGENT_ROBOT_IDENTITY=agent-robot
+AGENT_ROBOT_PROVIDER=gemini
+AGENT_ROBOT_INSTRUCTIONS=You are Agent-Robot, the voice agent under test. Keep replies concise and conversational.
 ```
 
-`AGENT_CITIZEN_PROVIDER` 和 `AGENT_SCHOLAR_PROVIDER` 都接受：
+`AGENT_HUMAN_PROVIDER` 和 `AGENT_ROBOT_PROVIDER` 都接受：
 
 - `openai`：使用 OpenAI Realtime。
 - `gemini`：使用 Gemini Live。
@@ -369,15 +371,15 @@ AGENT_SCHOLAR_INSTRUCTIONS=You are Agent-Scholar, the voice agent under test. Ke
 例如兩邊都使用 OpenAI：
 
 ```env
-AGENT_CITIZEN_PROVIDER=openai
-AGENT_SCHOLAR_PROVIDER=openai
+AGENT_HUMAN_PROVIDER=openai
+AGENT_ROBOT_PROVIDER=openai
 ```
 
 例如兩邊都使用 Gemini：
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
-AGENT_SCHOLAR_PROVIDER=gemini
+AGENT_HUMAN_PROVIDER=gemini
+AGENT_ROBOT_PROVIDER=gemini
 ```
 
 程式只會要求實際使用到的 provider 認證。OpenAI 官方 backend 使用
@@ -388,8 +390,8 @@ OpenAI 預設使用官方 API。若要改用 Azure OpenAI Realtime，角色仍�
 `provider=openai`，並設定共用 backend：
 
 ```env
-AGENT_CITIZEN_PROVIDER=openai
-AGENT_SCHOLAR_PROVIDER=openai
+AGENT_HUMAN_PROVIDER=openai
+AGENT_ROBOT_PROVIDER=openai
 OPENAI_BACKEND=azure
 AZURE_OPENAI_API_KEY=your-azure-openai-api-key
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
@@ -406,11 +408,11 @@ endpoint（`/openai/realtime`）。Azure 模式不需要 `OPENAI_API_KEY`，且 
 名稱取代 `OPENAI_REALTIME_MODEL`。
 
 MiniCPM-o 4.5 必須先部署官方 Gateway、Worker 與 Backend，Vox Symposium 只連公開
-Gateway，不直接連 Worker 或 Backend。以下範例只將被測的 Scholar 換成 MiniCPM：
+Gateway，不直接連 Worker 或 Backend。以下範例只將被測的 Robot 換成 MiniCPM：
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
-AGENT_SCHOLAR_PROVIDER=minicpm
+AGENT_HUMAN_PROVIDER=gemini
+AGENT_ROBOT_PROVIDER=minicpm
 MINICPM_REALTIME_URL=ws://127.0.0.1:8006/v1/realtime?mode=audio
 MINICPM_LENGTH_PENALTY=1.1
 MINICPM_INPUT_CHUNK_MS=1000
@@ -431,11 +433,11 @@ Freeze-Omni 權重。使用前先安裝可選依賴：
 pip install -e '.[freeze-omni]'
 ```
 
-只將 Scholar 換成 Freeze-Omni：
+只將 Robot 換成 Freeze-Omni：
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
-AGENT_SCHOLAR_PROVIDER=freeze_omni
+AGENT_HUMAN_PROVIDER=gemini
+AGENT_ROBOT_PROVIDER=freeze_omni
 FREEZE_OMNI_REALTIME_URL=https://127.0.0.1:8081
 FREEZE_OMNI_SSL_VERIFY=false
 FREEZE_OMNI_INPUT_CHUNK_MS=20
@@ -468,11 +470,11 @@ Moshi 和 PersonaPlex 走 Moshi 二進位 WebSocket protocol：Vox 送入/接收
 pip install -e '.[moshi]'
 ```
 
-只將 Scholar 換成 Moshi：
+只將 Robot 換成 Moshi：
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
-AGENT_SCHOLAR_PROVIDER=moshi
+AGENT_HUMAN_PROVIDER=gemini
+AGENT_ROBOT_PROVIDER=moshi
 MOSHI_REALTIME_URL=ws://127.0.0.1:8998/api/chat
 ```
 
@@ -483,11 +485,11 @@ system prompt / instructions。Vox 端會把 instructions 放進 `text_prompt` q
 但官方 `/api/chat` server 不會讀取這個參數，因此角色資料、場景與歷史對話不會真的
 被 Moshi 使用；模型行為主要由 server 啟動時載入的 weights/model 決定。
 
-PersonaPlex live server 也使用同一個 adapter。固定的 voice prompt 放在 URL query；每個 scenario/case 的 Scholar instructions 會由 Vox 自動 URL encode 後寫入 `text_prompt`，不用在 `.env` 寫死角色 prompt。
+PersonaPlex live server 也使用同一個 adapter。固定的 voice prompt 放在 URL query；每個 scenario/case 的 Robot instructions 會由 Vox 自動 URL encode 後寫入 `text_prompt`，不用在 `.env` 寫死角色 prompt。
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
-AGENT_SCHOLAR_PROVIDER=personaplex
+AGENT_HUMAN_PROVIDER=gemini
+AGENT_ROBOT_PROVIDER=personaplex
 PERSONAPLEX_REALTIME_URL=ws://127.0.0.1:8998/api/chat?voice_prompt=NATF2.pt
 ```
 

@@ -9,13 +9,13 @@ PersonaPlex live server 使用 Moshi `/api/chat` 二進位 WebSocket protocol，
 Vox 端設定：
 
 ```env
-AGENT_SCHOLAR_PROVIDER=personaplex
+AGENT_ROBOT_PROVIDER=personaplex
 PERSONAPLEX_REALTIME_URL=ws://127.0.0.1:8998/api/chat?voice_prompt=NATF2.pt
 ```
 
 `PERSONAPLEX_REALTIME_URL` 可以只填 `ws://127.0.0.1:8998?voice_prompt=NATF2.pt`，Vox 會自動補 `/api/chat`。
 
-固定 voice prompt 放在 URL query；每個 scenario/case 的 Scholar instructions 會由 Vox 自動 URL encode 後寫入 `text_prompt`，不要在 `.env` 寫死角色 prompt。
+固定 voice prompt 放在 URL query；每個 scenario/case 的 Robot instructions 會由 Vox 自動 URL encode 後寫入 `text_prompt`，不要在 `.env` 寫死角色 prompt。
 
 ## Server deployment
 
@@ -53,8 +53,8 @@ Vox 對所有 provider 都使用同一套 scenario prompt builder。PersonaPlex 
 
 opening 的處理依 agent 分開，這是所有 provider 的共通規則：
 
-- `agent-citizen` prompt 只到 history 最後 -1 句，因為最後一句 opening 會以音訊送進 citizen。
-- `agent-scholar` prompt 包含完整 history 到最後 1 句，因為那句是 scholar 已經說過的 opening，scholar 不會再透過音訊收到自己的話。
+- `agent-human` prompt 只到 history 最後 -1 句，因為最後一句 opening 會以音訊送進 human。
+- `agent-robot` prompt 包含完整 history 到最後 1 句，因為那句是 robot 已經說過的 opening，robot 不會再透過音訊收到自己的話。
 
 Vox 不會把 evaluation/runtime meta prompt 寫進 provider instructions，例如「你是被評估模型」、「opening reserved for playback」、「evaluation question」等。
 

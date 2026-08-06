@@ -47,9 +47,9 @@ vox-symposium-evaluate SCENARIO RESULT [options]
 | 參數 | 預設 | 說明 |
 | --- | --- | --- |
 | `--audio-dir AUDIO_DIR` | 無 | 原始 speech wav 檔所在資料夾。用 source dataset 轉 normalized scenario 時會用到。 |
-| `--dialogue-turns DIALOGUE_TURNS` | `5` | evaluation question 前要收集的 scholar 回合數。會覆蓋 scenario 裡的 `run.dialogue_turns` / `evaluation.ask_after_turns`。 |
+| `--dialogue-turns DIALOGUE_TURNS` | `5` | evaluation question 前要收集的 robot 回合數。會覆蓋 scenario 裡的 `run.dialogue_turns` / `evaluation.ask_after_turns`。 |
 | `--question-audio QUESTION_AUDIO` | scenario 的 `evaluation.question_audio` | 指定 evaluation question 音檔，會覆蓋 scenario JSON 內設定。支援 `.wav`；`.mp3` 會先轉成 WAV。 |
-| `--answer-audio ANSWER_AUDIO` | artifacts 內的 `scholar-answer.wav` | 指定 scholar evaluation answer 的輸出 WAV 路徑。只能在單筆 evaluation 使用。 |
+| `--answer-audio ANSWER_AUDIO` | artifacts 內的 `robot-answer.wav` | 指定 robot evaluation answer 的輸出 WAV 路徑。只能在單筆 evaluation 使用。 |
 | `--frame-ms FRAME_MS` | `20` | 串流音訊時每個 audio frame 的毫秒數。 |
 | `--audio-speed AUDIO_SPEED` | `EVALUATION_AUDIO_SPEED` 或 `1.0` | 音訊注入速度。`1.0` 是 real-time；更大的值會更快送音訊，可能降低長批次 timeout 風險，但也可能影響 VAD / turn detection；`0` 表示不 sleep。 |
 | `--no-tts` | `false` | 要求必須有 question audio；如果 scenario 沒有 `evaluation.question_audio` 且沒有傳 `--question-audio`，就直接失敗，不嘗試用 macOS `say` 產生題目音訊。 |
@@ -83,7 +83,7 @@ vox-symposium-evaluate SCENARIO RESULT [options]
 | `<artifact-dir>/console-log.txt` | CLI stdout / stderr log。重複使用同一個 artifact dir 時會用 `###################################` 分隔並繼續追加，不會清除舊 log。 |
 | `<artifact-dir>/run-env.txt` | 本次 provider、model、backend、voice、run id、參數等非敏感環境快照。API key 不會寫入。 |
 | `<artifact-dir>/<row-id>/dialogue-log.json` | 單筆 scenario 的 opening、dialogue turns、evaluation question / answer event log。 |
-| `<artifact-dir>/<row-id>/scholar-answer.wav` | scholar 對 evaluation question 的回答音訊。 |
+| `<artifact-dir>/<row-id>/robot-answer.wav` | robot 對 evaluation question 的回答音訊。 |
 
 如果單筆 case 因 timeout、connection error 或其他 exception 失敗，runner 會刪除該 case 的 `<artifact-dir>/<row-id>/` 子資料夾，等待 `--case-retry-delay` 秒後重試。預設最多嘗試 3 次；第 3 次仍失敗時，整次 evaluation 會失敗退出。
 
@@ -218,12 +218,12 @@ python3 -m vox_symposium.evaluation \
 evaluation runner 依 `.env` 決定兩個 agent 使用哪個 provider：
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
-AGENT_SCHOLAR_PROVIDER=gemini
+AGENT_HUMAN_PROVIDER=gemini
+AGENT_ROBOT_PROVIDER=gemini
 GEMINI_API_KEY=your-gemini-api-key
 ```
 
-若沒有設定，預設是 `citizen=openai`、`scholar=gemini`，不會是兩個 Gemini 對講。
+若沒有設定，預設是 `human=openai`、`robot=gemini`，不會是兩個 Gemini 對講。
 OpenAI Realtime 可用 `OPENAI_REALTIME_REASONING_EFFORT=low` 設定 Realtime 2 的 reasoning effort。
 如果遇到 `ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout`，
 可先設定 `OPENAI_REALTIME_PING_INTERVAL=20` 與 `OPENAI_REALTIME_PING_TIMEOUT=120`。

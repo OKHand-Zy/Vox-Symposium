@@ -201,13 +201,13 @@ def _build_local_hf_model(
 
 ## `.env` 範例
 
-只把 Agent-Scholar 換成本地 HF 模型，Agent-Citizen 仍使用 Gemini：
+只把 Agent-Robot 換成本地 HF 模型，Agent-Human 仍使用 Gemini：
 
 ```env
-AGENT_CITIZEN_PROVIDER=gemini
+AGENT_HUMAN_PROVIDER=gemini
 GEMINI_API_KEY=your-gemini-api-key
 
-AGENT_SCHOLAR_PROVIDER=local_hf
+AGENT_ROBOT_PROVIDER=local_hf
 LOCAL_HF_MODEL_PATH=models/hf/your-model
 LOCAL_HF_DEVICE=cuda
 ```
@@ -215,8 +215,8 @@ LOCAL_HF_DEVICE=cuda
 兩邊都使用本地 HF 模型：
 
 ```env
-AGENT_CITIZEN_PROVIDER=local_hf
-AGENT_SCHOLAR_PROVIDER=local_hf
+AGENT_HUMAN_PROVIDER=local_hf
+AGENT_ROBOT_PROVIDER=local_hf
 LOCAL_HF_MODEL_PATH=models/hf/your-model
 LOCAL_HF_DEVICE=cuda
 ```
@@ -224,15 +224,15 @@ LOCAL_HF_DEVICE=cuda
 如果兩個角色要用不同本地模型，建議把設定拆成：
 
 ```env
-AGENT_CITIZEN_PROVIDER=local_hf
-AGENT_CITIZEN_HF_MODEL_PATH=models/hf/citizen-model
+AGENT_HUMAN_PROVIDER=local_hf
+AGENT_HUMAN_HF_MODEL_PATH=models/hf/human-model
 
-AGENT_SCHOLAR_PROVIDER=local_hf
-AGENT_SCHOLAR_HF_MODEL_PATH=models/hf/scholar-model
+AGENT_ROBOT_PROVIDER=local_hf
+AGENT_ROBOT_HF_MODEL_PATH=models/hf/robot-model
 ```
 
 這種寫法需要把 `LocalHFSettings` 改成 per-agent 設定，或讓 loader 接受 agent role；evaluation
-會為 citizen 與 scholar 分別建立自己的 adapter instance。
+會為 human 與 robot 分別建立自己的 adapter instance。
 
 ## 依賴安裝
 

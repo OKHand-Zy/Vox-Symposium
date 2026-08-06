@@ -11,7 +11,10 @@ from typing import Any, Literal
 from vox_symposium.json_io import read_json, write_json
 from vox_symposium.providers import normalize_provider
 
-AgentKey = Literal["citizen", "scholar"]
+AgentKey = Literal["human", "robot"]
+HUMAN_AGENT: AgentKey = "human"
+ROBOT_AGENT: AgentKey = "robot"
+AGENT_KEYS: tuple[AgentKey, AgentKey] = (HUMAN_AGENT, ROBOT_AGENT)
 
 DIALOGUE_BEHAVIOR = (
     "Stay in character and respond with the speaking style, perspective, emotions, and reasoning that fit "
@@ -33,11 +36,24 @@ MINICPM_DIALOGUE_BEHAVIOR = SHORT_REPLY_DIALOGUE_BEHAVIOR
 FREEZE_OMNI_DIALOGUE_BEHAVIOR = SHORT_REPLY_DIALOGUE_BEHAVIOR
 
 _SOURCE_ROLE_TO_AGENT: dict[str, AgentKey] = {
-    "human": "citizen",
-    "user": "citizen",
-    "gpt": "scholar",
-    "assistant": "scholar",
+    "human": HUMAN_AGENT,
+    "user": HUMAN_AGENT,
+    "gpt": ROBOT_AGENT,
+    "assistant": ROBOT_AGENT,
 }
+
+
+def validate_agent(agent: str) -> AgentKey:
+    if agent == HUMAN_AGENT:
+        return HUMAN_AGENT
+    if agent == ROBOT_AGENT:
+        return ROBOT_AGENT
+    raise ValueError(f"Unsupported scenario agent: {agent}")
+
+
+def other_agent(agent: str) -> AgentKey:
+    agent = validate_agent(agent)
+    return ROBOT_AGENT if agent == HUMAN_AGENT else HUMAN_AGENT
 
 
 @dataclass(frozen=True)
@@ -161,11 +177,17 @@ def normalize_scenario(
 ) -> dict[str, Any]:
     if _is_normalized(record):
         return record
+    if _looks_like_normalized_scenario(record):
+        expected = ", ".join(AGENT_KEYS)
+        raise RuntimeError(
+            f"Normalized scenario must define exactly these agents: {expected}. "
+            "Regenerate it with vox-symposium-scenario."
+        )
 
     scenario_id = str(record["id"])
     row_id = str(record.get("row_id") or scenario_id)
     human_name = str(record.get("human") or _name_from_profile(record.get("character_1", "")))
-    gpt_name = str(record.get("gpt") or _name_from_profile(record.get("system", "")))
+    robot_name = str(record.get("gpt") or _name_from_profile(record.get("system", "")))
     profiles = [
         record.get("system", ""),
         record.get("character_1", ""),
@@ -175,7 +197,7 @@ def normalize_scenario(
     turns = _normalize_turns(
         record.get("conversations") or [],
         human_name=human_name,
-        gpt_name=gpt_name,
+        robot_name=robot_name,
         speech=record.get("speech") or [],
         audio_dir=audio_dir,
     )
@@ -190,15 +212,15 @@ def normalize_scenario(
             "row_id": row_id,
         },
         "agents": {
-            "citizen": {
+            HUMAN_AGENT: {
                 "name": human_name,
                 "source_role": "human",
                 "profile": _profile_for(human_name, profiles),
             },
-            "scholar": {
-                "name": gpt_name,
+            ROBOT_AGENT: {
+                "name": robot_name,
                 "source_role": "gpt",
-                "profile": _profile_for(gpt_name, [record.get("system", ""), *profiles]),
+                "profile": _profile_for(robot_name, [record.get("system", ""), *profiles]),
             },
         },
         "scene": {
@@ -211,11 +233,11 @@ def normalize_scenario(
         "opening": opening,
         "run": {
             "dialogue_turns": dialogue_turns,
-            "turn_definition": "one citizen response plus one scholar response",
+            "turn_definition": f"one {HUMAN_AGENT} response plus one {ROBOT_AGENT} response",
         },
         "evaluation": {
             "ask_after_turns": dialogue_turns,
-            "target_agent": "scholar",
+            "target_agent": ROBOT_AGENT,
             "question": record.get("question"),
             "choices": record.get("multichoice") or [],
             "correct_answer": record.get("correct_answer"),
@@ -235,13 +257,12 @@ def build_agent_instructions(
     dialogue_behavior_extra: str | None = None,
     include_history: bool = True,
 ) -> str:
-    if agent not in {"citizen", "scholar"}:
-        raise ValueError(f"Unsupported scenario agent: {agent}")
+    agent = validate_agent(agent)
 
     agents = scenario["agents"]
     self_agent = agents[agent]
-    other_key = "scholar" if agent == "citizen" else "citizen"
-    other_agent = agents[other_key]
+    other_key = other_agent(agent)
+    partner_agent = agents[other_key]
     scene = scenario.get("scene") or {}
 
     lines = [
@@ -251,7 +272,7 @@ def build_agent_instructions(
         str(self_agent.get("profile") or self_agent["name"]),
         "",
         "Conversation partner:",
-        f"{other_agent['name']}: {other_agent.get('profile') or other_agent['name']}",
+        f"{partner_agent['name']}: {partner_agent.get('profile') or partner_agent['name']}",
         "",
         "Scene:",
         f"- Type: {_empty_to_unknown(scene.get('type'))}",
@@ -278,8 +299,7 @@ def build_agent_initial_history(
     The opening turn remains realtime input for its recipient, so it is seeded
     only for the speaker that already produced it.
     """
-    if agent not in {"citizen", "scholar"}:
-        raise ValueError(f"Unsupported scenario agent: {agent}")
+    agent = validate_agent(agent)
 
     turns = list(scenario.get("history") or [])
     opening = scenario.get("opening")
@@ -289,8 +309,7 @@ def build_agent_initial_history(
     history: list[dict[str, Any]] = []
     for turn in turns:
         speaker = turn.get("agent")
-        if speaker not in {"citizen", "scholar"}:
-            raise ValueError(f"Scenario history turn has unsupported agent: {speaker!r}")
+        speaker = validate_agent(speaker)
         history.append(
             {
                 "role": "model" if speaker == agent else "user",
@@ -499,7 +518,7 @@ def _normalize_turns(
     conversations: list[dict[str, Any]],
     *,
     human_name: str,
-    gpt_name: str,
+    robot_name: str,
     speech: list[str],
     audio_dir: str | Path | None,
 ) -> list[dict[str, Any]]:
@@ -517,7 +536,7 @@ def _normalize_turns(
                 f"Conversation turn {index} has unsupported role {source_role!r}; "
                 f"expected one of: {supported}"
             ) from exc
-        speaker = human_name if agent == "citizen" else gpt_name
+        speaker = human_name if agent == HUMAN_AGENT else robot_name
         normalized = {
             "index": index,
             "agent": agent,
@@ -555,7 +574,18 @@ def _question_audio_path(scenario_id: str, question_audio_dir: str | Path | None
 
 
 def _is_normalized(record: dict[str, Any]) -> bool:
-    return "agents" in record and "history" in record and "evaluation" in record
+    return (
+        _looks_like_normalized_scenario(record)
+        and set(record["agents"]) == set(AGENT_KEYS)
+    )
+
+
+def _looks_like_normalized_scenario(record: dict[str, Any]) -> bool:
+    return (
+        isinstance(record.get("agents"), dict)
+        and "history" in record
+        and isinstance(record.get("evaluation"), dict)
+    )
 
 
 def _profile_for(name: str, profiles: list[str]) -> str:
