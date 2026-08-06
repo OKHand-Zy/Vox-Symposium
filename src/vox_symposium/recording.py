@@ -17,6 +17,14 @@ class RecordedAudio:
 
 
 def write_wav(path: str | Path, audio: PcmAudio) -> RecordedAudio:
+    if audio.sample_rate <= 0:
+        raise ValueError("sample_rate must be positive")
+    if audio.channels < 1:
+        raise ValueError("channels must be at least 1")
+    frame_width = audio.channels * 2
+    if len(audio.data) % frame_width:
+        raise ValueError("PCM data length must be a whole number of audio frames")
+
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(output_path), "wb") as wav:

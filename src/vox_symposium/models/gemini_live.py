@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 from google import genai
 from google.genai import types
@@ -50,17 +50,20 @@ class GeminiLiveModel(QueueBackedRealtimeAudioModel):
         self.manual_activity = manual_activity
         if self.enable_affective_dialog and gemini_uses_thinking_level(self.model):
             raise ValueError(
-                "Affective dialog is supported only by Gemini 2.5 Flash Live, not Gemini 3 Live models"
+                "Affective dialog is supported only by Gemini 2.5 Flash Live, "
+                "not Gemini 3 Live models"
             )
         if self.initial_history and not gemini_uses_thinking_level(self.model):
             raise ValueError(
-                "Initial history via send_client_content is supported only by Gemini 3 Live models; "
+                "Initial history via send_client_content is supported only by "
+                "Gemini 3 Live models; "
                 "Gemini 2.5 client content remains a normal turn-based input flow"
             )
         if backend == "vertex":
             if not vertex_project or not vertex_location or not credentials_file:
                 raise ValueError(
-                    "Vertex Gemini requires project, location, and a service account credentials file"
+                    "Vertex Gemini requires project, location, and a service account "
+                    "credentials file"
                 )
             credentials = service_account.Credentials.from_service_account_file(
                 credentials_file,
@@ -86,12 +89,14 @@ class GeminiLiveModel(QueueBackedRealtimeAudioModel):
     async def connect(self) -> None:
         uses_thinking_level = gemini_uses_thinking_level(self.model)
         config = types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
+            response_modalities=[types.Modality.AUDIO],
             system_instruction=self.instructions,
             output_audio_transcription=types.AudioTranscriptionConfig(),
         )
         if uses_thinking_level:
-            config.thinking_config = types.ThinkingConfig(thinking_level=self.thinking_level)
+            config.thinking_config = types.ThinkingConfig(
+                thinking_level=types.ThinkingLevel(self.thinking_level)
+            )
         elif self.thinking_budget is not None:
             config.thinking_config = types.ThinkingConfig(thinking_budget=self.thinking_budget)
         if self.enable_affective_dialog:
@@ -101,21 +106,23 @@ class GeminiLiveModel(QueueBackedRealtimeAudioModel):
         if self.manual_activity:
             config.realtime_input_config = types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(disabled=True),
-                activity_handling="NO_INTERRUPTION",
-                **({"turn_coverage": "TURN_INCLUDES_ALL_INPUT"} if not uses_thinking_level else {}),
+                activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+                turn_coverage=(
+                    types.TurnCoverage.TURN_INCLUDES_ALL_INPUT if not uses_thinking_level else None
+                ),
             )
         self._session_cm = self._client.aio.live.connect(model=self.model, config=config)
         self._session = await self._session_cm.__aenter__()
         if self.initial_history:
             await self._session.send_client_content(
-                turns=list(self.initial_history),
+                turns=cast(Any, list(self.initial_history)),
                 turn_complete=True,
             )
         self._reader_task = asyncio.create_task(
             self._read_loop(), name=f"gemini-{self.model}-reader"
         )
 
-    def _client_http_options(self) -> dict[str, types.HttpOptions]:
+    def _client_http_options(self) -> dict[str, Any]:
         if not self.enable_affective_dialog:
             return {}
         return {"http_options": types.HttpOptions(api_version="v1alpha")}
@@ -181,7 +188,7 @@ class GeminiLiveModel(QueueBackedRealtimeAudioModel):
                         await self._text_out.put(content.output_transcription.text)
                     if not content.model_turn:
                         continue
-                    for part in content.model_turn.parts:
+                    for part in content.model_turn.parts or ():
                         if part.inline_data and part.inline_data.data:
                             await self._audio_out.put(
                                 PcmAudio(

@@ -17,13 +17,16 @@ ROBOT_AGENT: AgentKey = "robot"
 AGENT_KEYS: tuple[AgentKey, AgentKey] = (HUMAN_AGENT, ROBOT_AGENT)
 
 DIALOGUE_BEHAVIOR = (
-    "Stay in character and respond with the speaking style, perspective, emotions, and reasoning that fit "
-    "your assigned role. Use the conversation history as context, and continue the same conversation while "
+    "Stay in character and respond with the speaking style, perspective, emotions, and reasoning "
+    "that fit your assigned role. Use the conversation history as context, and continue the same "
+    "conversation while "
     "preserving details from earlier turns.\n\n"
-    "When the other speaker shows interest, agreement, or reduced hesitation, continue by exploring "
-    "practical next steps, preferences, concerns, constraints, trade-offs, examples, or conditions for "
+    "When the other speaker shows interest, agreement, or reduced hesitation, continue by "
+    "exploring practical next steps, preferences, concerns, constraints, trade-offs, examples, or "
+    "conditions for "
     "trying the recommendation.\n\n"
-    "Avoid closing the conversation or shifting into farewell-style responses. Each response should leave a "
+    "Avoid closing the conversation or shifting into farewell-style responses. Each response "
+    "should leave a "
     "natural opening for the other speaker to continue, grounded in the existing conversation."
 )
 
@@ -381,6 +384,8 @@ def extract_answer_choice(response_text: str, choices: list[str]) -> str | None:
 
     normalized_text = _normalize_choice_text(text)
     for choice in choices:
+        if not isinstance(choice, str):
+            continue
         choice_match = re.match(r"\s*([A-D])[\s\.\):：-]*(.*)", choice, flags=re.IGNORECASE)
         if not choice_match:
             continue
@@ -417,7 +422,10 @@ def main() -> None:
     parser.add_argument("--audio-dir", help="Directory containing speech wav files.")
     parser.add_argument(
         "--question-audio-dir",
-        help="Directory containing question_{id}.wav files. Defaults to data/question_audio/<dataset>.",
+        help=(
+            "Directory containing question_{id}.wav files. "
+            "Defaults to data/question_audio/<dataset>."
+        ),
     )
     parser.add_argument(
         "--dialogue-turns", type=int, default=5, help="Dialogue turns before evaluation."
@@ -574,10 +582,7 @@ def _question_audio_path(scenario_id: str, question_audio_dir: str | Path | None
 
 
 def _is_normalized(record: dict[str, Any]) -> bool:
-    return (
-        _looks_like_normalized_scenario(record)
-        and set(record["agents"]) == set(AGENT_KEYS)
-    )
+    return _looks_like_normalized_scenario(record) and set(record["agents"]) == set(AGENT_KEYS)
 
 
 def _looks_like_normalized_scenario(record: dict[str, Any]) -> bool:

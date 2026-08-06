@@ -17,11 +17,7 @@ from vox_symposium.env import (
     optional_int_env,
     required_env,
 )
-from vox_symposium.providers import (
-    MOSHI_PROTOCOL_PROVIDERS,
-    normalize_provider,
-    provider_env_prefix,
-)
+from vox_symposium.providers import normalize_provider, provider_env_prefix
 
 
 @dataclass(frozen=True)

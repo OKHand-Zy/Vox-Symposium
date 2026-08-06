@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from vox_symposium.audio import PcmAudio, concatenate_pcm_audio, rechunk_pcm16
+from vox_symposium.audio import (
+    PCM_SAMPLE_WIDTH_BYTES,
+    PcmAudio,
+    concatenate_pcm_audio,
+    rechunk_pcm16,
+)
 from vox_symposium.models.base import RealtimeAudioModel, RealtimeInterruption
 
 
@@ -25,6 +30,13 @@ async def collect_utterance(
     idle_timeout: float,
     max_seconds: float,
 ) -> AudioUtterance:
+    if idle_timeout < 0:
+        raise ValueError("idle_timeout must be at least 0")
+    if max_seconds <= 0:
+        raise ValueError("max_seconds must be greater than 0")
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max_seconds
     try:
         first = await asyncio.wait_for(queue.get(), timeout=max_seconds)
     except TimeoutError as exc:
@@ -33,9 +45,8 @@ async def collect_utterance(
         raise RuntimeError(f"{agent} model audio stream closed before an utterance was captured")
 
     chunks = [first]
-    started_at = asyncio.get_running_loop().time()
     while True:
-        remaining = max_seconds - (asyncio.get_running_loop().time() - started_at)
+        remaining = deadline - loop.time()
         if remaining <= 0:
             break
         try:
@@ -93,9 +104,16 @@ async def send_audio(
             )
             await asyncio.sleep(frame_seconds)
 
-        silence = b"\x00" * (int(audio.sample_rate * 0.2) * 2)
-        for chunk in rechunk_pcm16(silence, audio.sample_rate, frame_ms):
-            await model.send_audio(PcmAudio(data=chunk, sample_rate=audio.sample_rate, channels=1))
+        silence = b"\x00" * (int(audio.sample_rate * 0.2) * PCM_SAMPLE_WIDTH_BYTES * audio.channels)
+        for chunk in rechunk_pcm16(
+            silence,
+            audio.sample_rate,
+            frame_ms,
+            channels=audio.channels,
+        ):
+            await model.send_audio(
+                PcmAudio(data=chunk, sample_rate=audio.sample_rate, channels=audio.channels)
+            )
             await asyncio.sleep(frame_seconds)
     finally:
         await model.flush_input_stream()
@@ -227,7 +245,11 @@ def resolve_question_audio_path(path_text: str, *, scenario_dir: Path) -> Path:
 
 def ensure_wav(path: Path, output: Path) -> Path:
     if path.suffix.lower() == ".wav":
-        return path
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if path.resolve() == output.resolve():
+            return path
+        shutil.copyfile(path, output)
+        return output
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError(
@@ -310,6 +332,10 @@ def read_wav(path: Path) -> PcmAudio:
 
 
 def frame_sleep_seconds(frame_ms: int, audio_speed: float) -> float:
+    if frame_ms <= 0:
+        raise ValueError("frame_ms must be greater than 0")
+    if audio_speed < 0:
+        raise ValueError("audio_speed must be at least 0")
     if audio_speed <= 0:
         return 0
     return (frame_ms / 1000) / audio_speed

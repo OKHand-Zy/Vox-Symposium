@@ -7,6 +7,7 @@ from vox_symposium.audio import (
     PcmAudio,
     concatenate_pcm_audio,
     ensure_mono_pcm16,
+    float32_to_pcm16,
     rechunk_pcm16,
 )
 
@@ -44,6 +45,11 @@ class AudioTests(unittest.TestCase):
                     PcmAudio(b"\x00\x00", sample_rate=24_000),
                 ]
             )
+
+    def test_float32_to_pcm16_replaces_non_finite_values_with_silence(self) -> None:
+        values = struct.pack("<fff", float("nan"), float("inf"), float("-inf"))
+
+        self.assertEqual(float32_to_pcm16(values), b"\x00\x00" * 3)
 
 
 if __name__ == "__main__":

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from typing import cast
 
 from vox_symposium.audio import PcmAudio
 from vox_symposium.evaluation import _consume_provider_interruptions
-from vox_symposium.models.base import RealtimeInterruption
-from vox_symposium.scenario import AGENT_KEYS
+from vox_symposium.models.base import RealtimeAudioModel, RealtimeInterruption
+from vox_symposium.scenario import AGENT_KEYS, HUMAN_AGENT, ROBOT_AGENT, AgentKey
 from vox_symposium.tick import TickAudioBuffer, TickResult, tick_result_fields
 
 
@@ -90,17 +91,29 @@ class ProviderInterruptionTests(unittest.IsolatedAsyncioTestCase):
             ) -> None:
                 self.truncations.append((event, audio_end_ms))
 
-        models = {agent: RecordingModel() for agent in AGENT_KEYS}
-        audio_queues = {agent: asyncio.Queue() for agent in AGENT_KEYS}
-        event_queues = {agent: asyncio.Queue() for agent in AGENT_KEYS}
-        buffers = {agent: TickAudioBuffer(sample_rate=1000) for agent in AGENT_KEYS}
-        buffers["robot"].append(PcmAudio(data=b"\x01\x00" * 300, sample_rate=1000))
-        buffers["robot"].pop_tick(100)
-        audio_queues["robot"].put_nowait(PcmAudio(data=b"\x02\x00", sample_rate=1000))
+        recording_models: dict[AgentKey, RecordingModel] = {
+            agent: RecordingModel() for agent in AGENT_KEYS
+        }
+        models = cast(dict[AgentKey, RealtimeAudioModel], recording_models)
+        audio_queues: dict[AgentKey, asyncio.Queue[PcmAudio | None]] = {
+            agent: asyncio.Queue() for agent in AGENT_KEYS
+        }
+        event_queues: dict[AgentKey, asyncio.Queue[RealtimeInterruption | None]] = {
+            agent: asyncio.Queue() for agent in AGENT_KEYS
+        }
+        buffers: dict[AgentKey, TickAudioBuffer] = {
+            agent: TickAudioBuffer(sample_rate=1000) for agent in AGENT_KEYS
+        }
+        buffers[ROBOT_AGENT].append(PcmAudio(data=b"\x01\x00" * 300, sample_rate=1000))
+        buffers[ROBOT_AGENT].pop_tick(100)
+        audio_queues[ROBOT_AGENT].put_nowait(PcmAudio(data=b"\x02\x00", sample_rate=1000))
         event = RealtimeInterruption(item_id="item-1")
-        event_queues["robot"].put_nowait(event)
-        interrupted_turn = {agent: False for agent in AGENT_KEYS}
-        forwarded_audio_ms = {"human": 0.0, "robot": 125.5}
+        event_queues[ROBOT_AGENT].put_nowait(event)
+        interrupted_turn: dict[AgentKey, bool] = {agent: False for agent in AGENT_KEYS}
+        forwarded_audio_ms: dict[AgentKey, float] = {
+            HUMAN_AGENT: 0.0,
+            ROBOT_AGENT: 125.5,
+        }
         dialogue_log = {"events": []}
 
         interrupted = await _consume_provider_interruptions(
@@ -115,10 +128,10 @@ class ProviderInterruptionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(interrupted, {"robot"})
-        self.assertEqual(buffers["robot"].pending_bytes, 0)
-        self.assertTrue(audio_queues["robot"].empty())
-        self.assertTrue(interrupted_turn["robot"])
-        self.assertEqual(models["robot"].truncations, [(event, 126)])
+        self.assertEqual(buffers[ROBOT_AGENT].pending_bytes, 0)
+        self.assertTrue(audio_queues[ROBOT_AGENT].empty())
+        self.assertTrue(interrupted_turn[ROBOT_AGENT])
+        self.assertEqual(recording_models[ROBOT_AGENT].truncations, [(event, 126)])
         self.assertEqual(dialogue_log["events"][0]["type"], "provider_interruption")
 
 

@@ -5,7 +5,7 @@ import asyncio
 import math
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from vox_symposium.audio import PcmAudio
 from vox_symposium.config import provider_uses_structured_history
@@ -56,9 +56,6 @@ from vox_symposium.evaluation_audio import (
 )
 from vox_symposium.evaluation_audio import (
     read_text_stream as _read_text,
-)
-from vox_symposium.evaluation_audio import (
-    send_audio as _send_audio,
 )
 from vox_symposium.evaluation_audio import (
     send_audio_file as _send_audio_file,
@@ -158,7 +155,8 @@ async def _run_evaluations(
         )
     if results:
         print(
-            f"Loaded {len(results)} completed result(s) before --start-index {start_index}: {result_path}"
+            f"Loaded {len(results)} completed result(s) before --start-index {start_index}: "
+            f"{result_path}"
         )
 
     write_summary_report(
@@ -299,7 +297,7 @@ async def _run_scenario_evaluation(
     artifact_dir = _scenario_artifact_dir(artifact_root, scenario.data)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    providers = {agent: _agent_provider(agent) for agent in AGENT_KEYS}
+    providers: dict[AgentKey, str] = {agent: _agent_provider(agent) for agent in AGENT_KEYS}
     prompts = {
         agent: scenario.build_prompt(
             agent,
@@ -308,7 +306,7 @@ async def _run_scenario_evaluation(
         )
         for agent in AGENT_KEYS
     }
-    models = {
+    models: dict[AgentKey, RealtimeAudioModel] = {
         agent: _build_model(
             agent,
             prompts[agent].instructions,
@@ -347,7 +345,7 @@ async def _run_scenario_evaluation(
                 asyncio.create_task(_read_event(model, event_queues[agent]), name=f"{agent}-events")
             )
 
-        next_agent = await _play_opening(
+        await _play_opening(
             scenario.data,
             models,
             artifact_dir=artifact_dir,
@@ -362,11 +360,9 @@ async def _run_scenario_evaluation(
             event_queues,
             dialogue_log=dialogue_log,
             artifact_dir=artifact_dir,
-            start_agent=next_agent,
             target_turns=args.dialogue_turns,
             idle_timeout=args.idle_timeout,
             max_utterance_seconds=args.max_utterance_seconds,
-            frame_ms=args.frame_ms,
             audio_speed=args.audio_speed,
             tick_duration_ms=args.tick_duration_ms,
         )
@@ -392,7 +388,7 @@ async def _run_scenario_evaluation(
         await _send_audio_file(
             question_audio,
             models[ROBOT_AGENT],
-            frame_ms=args.tick_duration_ms,
+            frame_ms=args.frame_ms,
             audio_speed=args.audio_speed,
         )
 
@@ -445,9 +441,7 @@ async def _run_scenario_evaluation(
     finally:
         for task in reader_tasks:
             task.cancel()
-        await asyncio.gather(
-            *(model.close() for model in models.values()), return_exceptions=True
-        )
+        await asyncio.gather(*(model.close() for model in models.values()), return_exceptions=True)
         if reader_tasks:
             await asyncio.gather(*reader_tasks, return_exceptions=True)
 
@@ -471,10 +465,10 @@ async def _play_opening(
     frame_ms: int,
     audio_speed: float,
     dialogue_log: dict[str, Any],
-) -> AgentKey:
+) -> None:
     opening = scenario.get("opening")
     if not opening:
-        return HUMAN_AGENT
+        return
 
     opening_agent = validate_agent(str(opening["agent"]))
     receiver = other_agent(opening_agent)
@@ -492,7 +486,6 @@ async def _play_opening(
     await _send_audio_file(
         opening_audio, models[receiver], frame_ms=frame_ms, audio_speed=audio_speed
     )
-    return receiver
 
 
 async def _run_dialogue_turns(
@@ -503,16 +496,12 @@ async def _run_dialogue_turns(
     *,
     dialogue_log: dict[str, Any],
     artifact_dir: Path,
-    start_agent: AgentKey,
     target_turns: int,
     idle_timeout: float,
     max_utterance_seconds: float,
-    frame_ms: int,
     audio_speed: float,
     tick_duration_ms: int,
 ) -> int:
-    del frame_ms, start_agent
-
     if tick_duration_ms <= 0:
         raise RuntimeError("--tick-duration-ms must be greater than 0")
 
@@ -521,17 +510,17 @@ async def _run_dialogue_turns(
     max_dialogue_seconds = max_utterance_seconds * max(1, target_turns * 2 + 1)
     started_at = asyncio.get_running_loop().time()
 
-    buffers = {agent: TickAudioBuffer() for agent in AGENT_KEYS}
-    active_audio = {agent: bytearray() for agent in AGENT_KEYS}
-    active_text = {agent: [] for agent in AGENT_KEYS}
+    buffers: dict[AgentKey, TickAudioBuffer] = {agent: TickAudioBuffer() for agent in AGENT_KEYS}
+    active_audio: dict[AgentKey, bytearray] = {agent: bytearray() for agent in AGENT_KEYS}
+    active_text: dict[AgentKey, list[str]] = {agent: [] for agent in AGENT_KEYS}
     turn_start_ticks: dict[AgentKey, int | None] = {agent: None for agent in AGENT_KEYS}
-    silence_ticks = {agent: 0 for agent in AGENT_KEYS}
-    interrupted_turn = {agent: False for agent in AGENT_KEYS}
-    forwarded_audio_ms = {agent: 0.0 for agent in AGENT_KEYS}
+    silence_ticks: dict[AgentKey, int] = {agent: 0 for agent in AGENT_KEYS}
+    interrupted_turn: dict[AgentKey, bool] = {agent: False for agent in AGENT_KEYS}
+    forwarded_audio_ms: dict[AgentKey, float] = {agent: 0.0 for agent in AGENT_KEYS}
     robot_turns = 0
     event_index = 0
     tick_number = 0
-    turn_counts = {agent: 0 for agent in AGENT_KEYS}
+    turn_counts: dict[AgentKey, int] = {agent: 0 for agent in AGENT_KEYS}
     tick_budget = tick_seconds / audio_speed if audio_speed > 0 else 0
     tick_wait = tick_budget if tick_budget > 0 else tick_seconds
     dialogue_log.setdefault("ticks", [])
@@ -544,8 +533,7 @@ async def _run_dialogue_turns(
     while robot_turns < target_turns:
         if asyncio.get_running_loop().time() - started_at >= max_dialogue_seconds:
             raise RuntimeError(
-                "Timed out waiting for dialogue turns after "
-                f"{max_dialogue_seconds:.1f}s"
+                f"Timed out waiting for dialogue turns after {max_dialogue_seconds:.1f}s"
             )
 
         tick_started_at = asyncio.get_running_loop().time()
@@ -610,9 +598,9 @@ async def _run_dialogue_turns(
         tick_result = TickResult(
             tick_number=tick_number,
             tick_duration_ms=tick_duration_ms,
-            audio=fixed_audio,
-            captured_audio=captured_audio,
-            truncated=truncated,
+            audio=cast(dict[str, PcmAudio], fixed_audio),
+            captured_audio=cast(dict[str, PcmAudio], captured_audio),
+            truncated=cast(dict[str, bool], truncated),
             interrupted_agents=tuple(sorted(interrupted_agents)),
         )
         dialogue_log.setdefault("ticks", []).append(
@@ -949,7 +937,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overnight",
         action="store_true",
-        help="Continue to the next scenario after retry attempts are exhausted, recording the case as failed.",
+        help=(
+            "Continue to the next scenario after retry attempts are exhausted, "
+            "recording the case as failed."
+        ),
     )
     parser.add_argument(
         "--no-tts",

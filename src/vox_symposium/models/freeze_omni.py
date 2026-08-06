@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import sys
 from array import array
 from urllib.parse import urlsplit
@@ -130,7 +131,7 @@ class FreezeOmniRealtimeModel(QueueBackedRealtimeAudioModel):
             self._client = client
 
             try:
-                await client.connect(self.url, wait_timeout=self.connect_timeout)
+                await client.connect(self.url, wait_timeout=math.ceil(self.connect_timeout))
                 self._connected = True
                 self._raise_if_failed()
                 await client.emit("prompt_text", self.instructions)

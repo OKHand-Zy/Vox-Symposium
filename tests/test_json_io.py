@@ -17,7 +17,7 @@ class JsonIoTests(unittest.TestCase):
                 write_json(path, {"invalid": object()})
 
             self.assertEqual(read_json(path), {"status": "complete"})
-            self.assertFalse((path.parent / f".{path.name}.tmp").exists())
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
 
 
 if __name__ == "__main__":

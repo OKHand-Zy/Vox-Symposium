@@ -85,13 +85,14 @@ class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
             raise RuntimeError("MiniCPM realtime websocket is already connected")
 
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
-        self._ws = await connect(
+        ws = await connect(
             self.url,
             additional_headers=headers,
             max_size=128 * 1024 * 1024,
             ping_interval=self.ping_interval,
             ping_timeout=self.ping_timeout,
         )
+        self._ws = ws
         try:
             await asyncio.wait_for(
                 self._wait_for_event("session.queue_done"),
@@ -111,7 +112,7 @@ class MiniCPMRealtimeModel(QueueBackedRealtimeAudioModel):
                 timeout=self.queue_timeout,
             )
         except Exception:
-            await self._ws.close()
+            await ws.close()
             self._ws = None
             raise
 

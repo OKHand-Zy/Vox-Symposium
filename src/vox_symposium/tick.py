@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from vox_symposium.audio import PCM_SAMPLE_WIDTH_BYTES, PcmAudio, normalize_audio
-
 
 TICK_AUDIO_SAMPLE_RATE = 24_000
 TICK_AUDIO_CHANNELS = 1
@@ -22,9 +22,9 @@ class TickResult:
 
     tick_number: int
     tick_duration_ms: int
-    audio: dict[str, PcmAudio]
-    captured_audio: dict[str, PcmAudio]
-    truncated: dict[str, bool]
+    audio: Mapping[str, PcmAudio]
+    captured_audio: Mapping[str, PcmAudio]
+    truncated: Mapping[str, bool]
     interrupted_agents: tuple[str, ...] = ()
 
     @property

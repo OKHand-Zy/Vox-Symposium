@@ -31,14 +31,16 @@ from vox_symposium.scenario import LoadedScenario
 
 class EvaluationTests(unittest.TestCase):
     def test_parse_args_uses_200ms_tick_default(self) -> None:
-        with patch.dict(os.environ, {}, clear=True), patch.object(
-            sys, "argv", ["vox-symposium-evaluate", "scenario.json", "result.json"]
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(sys, "argv", ["vox-symposium-evaluate", "scenario.json", "result.json"]),
         ):
             self.assertEqual(_parse_args().tick_duration_ms, 200)
 
     def test_parse_args_allows_tick_duration_environment_override(self) -> None:
-        with patch.dict(os.environ, {"EVALUATION_TICK_DURATION_MS": "125"}, clear=True), patch.object(
-            sys, "argv", ["vox-symposium-evaluate", "scenario.json", "result.json"]
+        with (
+            patch.dict(os.environ, {"EVALUATION_TICK_DURATION_MS": "125"}, clear=True),
+            patch.object(sys, "argv", ["vox-symposium-evaluate", "scenario.json", "result.json"]),
         ):
             self.assertEqual(_parse_args().tick_duration_ms, 125)
 

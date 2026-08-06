@@ -4,6 +4,7 @@ import sys
 from array import array
 from collections.abc import Iterable
 from dataclasses import dataclass
+from math import isfinite
 
 PCM_SAMPLE_WIDTH_BYTES = 2
 
@@ -55,10 +56,10 @@ def ensure_mono_pcm16(data: bytes, channels: int) -> bytes:
 
 
 def resample_pcm16_mono(data: bytes, from_rate: int, to_rate: int) -> bytes:
-    if from_rate == to_rate or not data:
-        return data
     if from_rate <= 0 or to_rate <= 0:
         raise ValueError("sample rates must be positive")
+    if from_rate == to_rate or not data:
+        return data
 
     src = _pcm16_array(data)
     if len(src) <= 1:
@@ -124,7 +125,7 @@ def float32_to_pcm16(data: bytes) -> bytes:
 
     pcm = array("h")
     for sample in samples:
-        if sample != sample:  # NaN
+        if not isfinite(sample):
             sample = 0.0
         value = int(round(sample * 32768.0))
         pcm.append(_clamp_pcm16(value))

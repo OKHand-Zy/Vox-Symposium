@@ -7,8 +7,8 @@ from pathlib import Path
 
 from vox_symposium.scenario import (
     FREEZE_OMNI_DIALOGUE_BEHAVIOR,
-    LoadedScenario,
     MINICPM_DIALOGUE_BEHAVIOR,
+    LoadedScenario,
     build_agent_initial_history,
     build_agent_instructions,
     extract_answer_choice,

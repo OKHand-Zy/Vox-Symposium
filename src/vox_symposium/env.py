@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable
+from math import isfinite
 
 
 def load_environment() -> bool:
@@ -61,10 +62,7 @@ def float_env(name: str, default: float) -> float:
     raw = os.getenv(name)
     if raw is None:
         return default
-    try:
-        return float(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be a number, got {raw!r}") from exc
+    return parse_float_env(name, raw)
 
 
 def optional_float_env(name: str, default: float | None = None) -> float | None:
@@ -74,10 +72,19 @@ def optional_float_env(name: str, default: float | None = None) -> float | None:
     normalized = raw.strip().lower()
     if normalized in {"", "none", "null", "off", "disabled"}:
         return None
+    return parse_float_env(name, raw, message=f"{name} must be a number or 'none'")
+
+
+def parse_float_env(name: str, raw: str, *, message: str | None = None) -> float:
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError as exc:
-        raise RuntimeError(f"{name} must be a number or 'none', got {raw!r}") from exc
+        detail = message or f"{name} must be a number"
+        raise RuntimeError(f"{detail}, got {raw!r}") from exc
+    if not isfinite(value):
+        detail = message or f"{name} must be a finite number"
+        raise RuntimeError(f"{detail}, got {raw!r}")
+    return value
 
 
 def bool_env(name: str, default: bool) -> bool:

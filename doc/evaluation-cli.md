@@ -73,7 +73,7 @@ dialogue tick 不會送 `audio_stream_end`；只有 evaluation question 整段�
 | 參數 | 預設 | 說明 |
 | --- | --- | --- |
 | `--idle-timeout IDLE_TIMEOUT` | `1.5` | 收到模型音訊後，連續多少秒沒有新音訊就視為該 utterance 結束。 |
-| `--max-utterance-seconds MAX_UTTERANCE_SECONDS` | `30.0` | 等待單次 utterance 的最長秒數。若模型常超時，可調大，例如 `--max-utterance-seconds 300`。 |
+| `--max-utterance-seconds MAX_UTTERANCE_SECONDS` | `30.0` | 從開始等待到單次 utterance 收集結束的最長秒數，包含等待第一個音訊 chunk 的時間。若模型常超時，可調大，例如 `--max-utterance-seconds 300`。 |
 | `--text-idle-timeout TEXT_IDLE_TIMEOUT` | `0.7` | 收到模型音訊後，文字 delta 連續多少秒沒有新內容就視為該文字輸出結束。 |
 | `--text-max-wait TEXT_MAX_WAIT` | `5.0` | 收到模型音訊後，最多補等多少秒以收集延遲到達的文字 delta。MiniCPM text/audio delta 不同步時可調大。 |
 | `--case-retries CASE_RETRIES` | `3` | 每筆 scenario 最多嘗試次數。單筆 case timeout 或其他 exception 時，會刪除該 case artifact 子資料夾後重試；達到次數仍失敗才讓整次 evaluation 失敗退出。 |
@@ -92,6 +92,7 @@ dialogue tick 不會送 `audio_stream_end`；只有 evaluation question 整段�
 | `<artifact-dir>/console-log.txt` | CLI stdout / stderr log。重複使用同一個 artifact dir 時會用 `###################################` 分隔並繼續追加，不會清除舊 log。 |
 | `<artifact-dir>/run-env.txt` | 本次 provider、model、backend、voice、run id、參數等非敏感環境快照。API key 不會寫入。 |
 | `<artifact-dir>/<row-id>/dialogue-log.json` | 單筆 scenario 的 opening、dialogue turns、evaluation question / answer event log。 |
+| `<artifact-dir>/<row-id>/question.wav` | evaluation question 的 artifacts copy；來源可為 WAV、其他 ffmpeg 支援的音訊格式或 macOS TTS。 |
 | `<artifact-dir>/<row-id>/robot-answer.wav` | robot 對 evaluation question 的回答音訊。 |
 
 如果單筆 case 因 timeout、connection error 或其他 exception 失敗，runner 會刪除該 case 的 `<artifact-dir>/<row-id>/` 子資料夾，等待 `--case-retry-delay` 秒後重試。預設最多嘗試 3 次；第 3 次仍失敗時，整次 evaluation 會失敗退出。

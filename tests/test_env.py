@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from vox_symposium.env import first_env, int_env, optional_int_env, required_env
+from vox_symposium.env import first_env, float_env, int_env, optional_int_env, required_env
 
 
 class EnvTests(unittest.TestCase):
@@ -27,6 +27,11 @@ class EnvTests(unittest.TestCase):
                 RuntimeError, "Missing required environment variable: API_KEY"
             ):
                 required_env("API_KEY")
+
+    def test_float_env_rejects_non_finite_values(self) -> None:
+        with patch.dict(os.environ, {"TIMEOUT": "nan"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "TIMEOUT must be a finite number"):
+                float_env("TIMEOUT", 1.0)
 
 
 if __name__ == "__main__":
