@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from vox_symposium.audio import PcmAudio, concatenate_pcm_audio, rechunk_pcm16
-from vox_symposium.models.base import RealtimeAudioModel
+from vox_symposium.models.base import RealtimeAudioModel, RealtimeInterruption
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ async def send_audio(
             await model.send_audio(PcmAudio(data=chunk, sample_rate=audio.sample_rate, channels=1))
             await asyncio.sleep(frame_seconds)
     finally:
-        await model.end_audio_turn()
+        await model.flush_input_stream()
 
 
 async def read_audio_stream(
@@ -119,6 +119,17 @@ async def read_text_stream(
     try:
         async for text in model.receive_text():
             await queue.put(text)
+    finally:
+        await queue.put(None)
+
+
+async def read_event_stream(
+    model: RealtimeAudioModel,
+    queue: asyncio.Queue[RealtimeInterruption | None],
+) -> None:
+    try:
+        async for event in model.receive_events():
+            await queue.put(event)
     finally:
         await queue.put(None)
 

@@ -28,18 +28,28 @@ def build_evaluation_model_from_env(
     instructions: str,
     *,
     initial_history: tuple[dict[str, Any], ...] = (),
+    continuous_audio: bool = False,
 ) -> RealtimeAudioModel:
     provider = normalize_provider(provider)
     if provider == "openai":
-        return _build_openai_model(load_openai_settings(), instructions)
+        return _build_openai_model(
+            load_openai_settings(), instructions, continuous_audio=continuous_audio
+        )
     if provider == "gemini":
         return _build_gemini_model(
-            load_gemini_settings(), instructions, initial_history=initial_history
+            load_gemini_settings(),
+            instructions,
+            initial_history=initial_history,
+            continuous_audio=continuous_audio,
         )
     if provider == "minicpm":
-        return _build_minicpm_model(load_minicpm_settings(), instructions)
+        return _build_minicpm_model(
+            load_minicpm_settings(), instructions, continuous_audio=continuous_audio
+        )
     if provider == "freeze_omni":
-        return _build_freeze_omni_model(load_freeze_omni_settings(), instructions)
+        return _build_freeze_omni_model(
+            load_freeze_omni_settings(), instructions, continuous_audio=continuous_audio
+        )
     if provider in MOSHI_PROTOCOL_PROVIDERS:
         config = load_moshi_settings(provider, required=True)
         if config is None:
@@ -50,7 +60,12 @@ def build_evaluation_model_from_env(
     raise RuntimeError(f"Unsupported provider: {provider}")
 
 
-def _build_openai_model(config: OpenAISettings, instructions: str) -> RealtimeAudioModel:
+def _build_openai_model(
+    config: OpenAISettings,
+    instructions: str,
+    *,
+    continuous_audio: bool = False,
+) -> RealtimeAudioModel:
     from vox_symposium.models.openai_realtime import OpenAIRealtimeModel
 
     return OpenAIRealtimeModel(
@@ -64,7 +79,7 @@ def _build_openai_model(config: OpenAISettings, instructions: str) -> RealtimeAu
         ping_interval=config.ping_interval,
         ping_timeout=config.ping_timeout,
         instructions=instructions,
-        manual_activity=True,
+        manual_activity=not continuous_audio,
     )
 
 
@@ -73,6 +88,7 @@ def _build_gemini_model(
     instructions: str,
     *,
     initial_history: tuple[dict[str, Any], ...],
+    continuous_audio: bool = False,
 ) -> RealtimeAudioModel:
     from vox_symposium.models.gemini_live import GeminiLiveModel
 
@@ -91,11 +107,16 @@ def _build_gemini_model(
         thinking_budget=config.thinking_budget,
         enable_affective_dialog=config.enable_affective_dialog,
         initial_history=history,
-        manual_activity=True,
+        manual_activity=not continuous_audio,
     )
 
 
-def _build_minicpm_model(config: MiniCPMSettings, instructions: str) -> RealtimeAudioModel:
+def _build_minicpm_model(
+    config: MiniCPMSettings,
+    instructions: str,
+    *,
+    continuous_audio: bool = False,
+) -> RealtimeAudioModel:
     from vox_symposium.models.minicpm_realtime import MiniCPMRealtimeModel
 
     return MiniCPMRealtimeModel(
@@ -107,11 +128,16 @@ def _build_minicpm_model(config: MiniCPMSettings, instructions: str) -> Realtime
         queue_timeout=config.queue_timeout,
         ping_interval=config.ping_interval,
         ping_timeout=config.ping_timeout,
-        evaluation_turn_taking=True,
+        evaluation_turn_taking=not continuous_audio,
     )
 
 
-def _build_freeze_omni_model(config: FreezeOmniSettings, instructions: str) -> RealtimeAudioModel:
+def _build_freeze_omni_model(
+    config: FreezeOmniSettings,
+    instructions: str,
+    *,
+    continuous_audio: bool = False,
+) -> RealtimeAudioModel:
     from vox_symposium.models.freeze_omni import FreezeOmniRealtimeModel
 
     return FreezeOmniRealtimeModel(
@@ -131,7 +157,7 @@ def _build_freeze_omni_model(config: FreezeOmniSettings, instructions: str) -> R
         post_turn_idle_seconds=config.post_turn_idle_seconds,
         post_turn_poll_chunk_ms=config.post_turn_poll_chunk_ms,
         stop_recording_after_turn=config.stop_recording_after_turn,
-        evaluation_turn_taking=True,
+        evaluation_turn_taking=not continuous_audio,
     )
 
 

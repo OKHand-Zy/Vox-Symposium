@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ from vox_symposium.evaluation import (
     _format_dialogue_capture,
     _limit_scenarios,
     _load_resume_results,
+    _parse_args,
     _remove_failed_case_artifacts,
     _result_payload,
     _scenario_artifact_dir,
@@ -28,6 +30,18 @@ from vox_symposium.scenario import LoadedScenario
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_parse_args_uses_200ms_tick_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            sys, "argv", ["vox-symposium-evaluate", "scenario.json", "result.json"]
+        ):
+            self.assertEqual(_parse_args().tick_duration_ms, 200)
+
+    def test_parse_args_allows_tick_duration_environment_override(self) -> None:
+        with patch.dict(os.environ, {"EVALUATION_TICK_DURATION_MS": "125"}, clear=True), patch.object(
+            sys, "argv", ["vox-symposium-evaluate", "scenario.json", "result.json"]
+        ):
+            self.assertEqual(_parse_args().tick_duration_ms, 125)
+
     def test_agent_provider_uses_human_and_robot_environment_settings(self) -> None:
         with patch.dict(
             os.environ,
@@ -46,6 +60,7 @@ class EvaluationTests(unittest.TestCase):
             limit=None,
             dialogue_turns=5,
             frame_ms=0,
+            tick_duration_ms=200,
             audio_speed=1.0,
             idle_timeout=1.5,
             max_utterance_seconds=30.0,

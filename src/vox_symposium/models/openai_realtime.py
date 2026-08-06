@@ -8,7 +8,11 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from websockets.asyncio.client import ClientConnection, connect
 
 from vox_symposium.audio import PcmAudio, normalize_audio
-from vox_symposium.models.base import QueueBackedRealtimeAudioModel, cancel_task
+from vox_symposium.models.base import (
+    QueueBackedRealtimeAudioModel,
+    RealtimeInterruption,
+    cancel_task,
+)
 
 _AUDIO_TRANSCRIPT_DELTA_EVENTS = {
     "response.audio_transcript.delta",
@@ -53,6 +57,7 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
         self.manual_activity = manual_activity
         self._ws: ClientConnection | None = None
         self._reader_task: asyncio.Task[None] | None = None
+        self._last_audio_item_id: str | None = None
 
     async def connect(self) -> None:
         url, headers = self._connection_config()
@@ -78,6 +83,7 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
                         if self.manual_activity
                         else {
                             "type": "semantic_vad",
+                            "interrupt_response": True,
                         }
                     ),
                 },
@@ -161,6 +167,23 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
             }
         )
 
+    async def truncate_response(
+        self,
+        event: RealtimeInterruption,
+        *,
+        audio_end_ms: int,
+    ) -> None:
+        if not event.item_id:
+            return
+        await self._send(
+            {
+                "type": "conversation.item.truncate",
+                "item_id": event.item_id,
+                "content_index": 0,
+                "audio_end_ms": max(0, audio_end_ms),
+            }
+        )
+
     async def close(self) -> None:
         reader_task = self._reader_task
         self._reader_task = None
@@ -186,6 +209,9 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
                 if event_type in {"response.output_audio.delta", "response.audio.delta"}:
                     delta = event.get("delta")
                     if delta:
+                        item_id = event.get("item_id")
+                        if item_id:
+                            self._last_audio_item_id = str(item_id)
                         await self._audio_out.put(
                             PcmAudio(
                                 data=base64.b64decode(delta),
@@ -193,6 +219,14 @@ class OpenAIRealtimeModel(QueueBackedRealtimeAudioModel):
                                 channels=1,
                             )
                         )
+                elif event_type == "input_audio_buffer.speech_started":
+                    await self._emit_event(
+                        RealtimeInterruption(
+                            item_id=self._last_audio_item_id,
+                            response_id=_optional_event_id(event, "response_id"),
+                        )
+                    )
+                    self._last_audio_item_id = None
                 elif event_type in _AUDIO_TRANSCRIPT_DELTA_EVENTS:
                     delta = event.get("delta")
                     if delta:
@@ -214,3 +248,8 @@ def _event_text_key(event: dict) -> str:
         str(event.get(key, ""))
         for key in ("response_id", "item_id", "output_index", "content_index")
     )
+
+
+def _optional_event_id(event: dict, key: str) -> str | None:
+    value = event.get(key)
+    return str(value) if value else None

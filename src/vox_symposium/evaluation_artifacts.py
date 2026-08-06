@@ -257,6 +257,7 @@ def write_run_env_snapshot(
         f"OVERNIGHT={args.overnight}",
         f"AUDIO_SPEED={args.audio_speed}",
         f"FRAME_MS={args.frame_ms}",
+        f"TICK_DURATION_MS={getattr(args, 'tick_duration_ms', 200)}",
         "",
     ]
 

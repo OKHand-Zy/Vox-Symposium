@@ -11,6 +11,7 @@ provider adapter 只處理各家協定；上層流程統一使用 PCM16 音訊�
 evaluation.py
   -> scenario.py 載入／正規化資料並建立角色 prompt
   -> models/factory.py 建立評測用 adapter
+  -> tick.py 以固定 tick 同步交換雙方音訊，處理 buffer、截斷與中斷
   -> evaluation_audio.py 串流 opening、對話與題目音訊
   -> evaluation_artifacts.py 管理 retry、summary、console log 與環境快照
   -> json_io.py 原子寫入 result、summary 與 dialogue log
@@ -26,7 +27,8 @@ evaluation.py
 | `scenario.py` | dataset normalization、角色 prompt、structured history、答案抽取。 |
 | `models/base.py` | 所有 adapter 共用的 async 介面、輸出 queue 與 task 清理。 |
 | `models/factory.py` | 依 provider 選擇評測用 adapter。 |
-| `evaluation.py` | 評測案例的高階編排、回合控制與 retry 流程。 |
+| `evaluation.py` | 評測案例的高階編排、tick 對話控制與 retry 流程。 |
+| `tick.py` | `TickResult`、固定長度 PCM tick、跨 tick buffer、輸出截斷與 provider event 清 buffer。 |
 | `evaluation_audio.py` | WAV/MP3/TTS 處理、音訊注入與 response 收集。 |
 | `evaluation_artifacts.py` | artifacts 路徑、續跑結果、summary、console log、非敏感環境快照。 |
 | `recording.py` | 寫入 WAV 與建立音訊 event metadata。 |
@@ -49,7 +51,16 @@ Scenario prompt 由 `LoadedScenario.build_prompt()` 統一建立：
 
 adapter 對上層一律收送 `PcmAudio`。`PcmAudio` 必須帶有實際的 sample rate 與 channel count；串接多個 chunk 時格式必須一致。`rechunk_pcm16()` 會把 channel count 納入 frame byte 數，因此 mono 與 stereo 都維持正確的 frame 時長。
 
-各 adapter 負責把輸入正規化成模型協定要求的格式；evaluation runner 會將輸出音訊與文字保存至 artifacts。
+各 adapter 負責把輸入正規化成模型協定要求的格式；dialogue 階段預設以 `200 ms` 為一個
+`TickResult`。每個 tick 會同時把 human 的固定長度輸出送給 robot、把 robot 的固定長度輸出送給
+human；provider 不整齊的輸出 chunk 先進入 `TickAudioBuffer`，多出的部分保留到下一 tick，短的部分以
+silence 補齊。provider 回報 interruption 時，會清除被中斷 agent 尚未送出的 pending output；OpenAI
+WebSocket 另外送出 `conversation.item.truncate`，Gemini 則依 `server_content.interrupted` 丟棄 client-side
+queued output。dialogue tick 不會送 `audio_stream_end`；只有 finite evaluation question 完整送完後才會
+呼叫一次 provider-specific input flush，且不會關閉既有 session。這個 tick 長度可用
+`EVALUATION_TICK_DURATION_MS` 或 `--tick-duration-ms` 調整。
+
+evaluation runner 會將輸出音訊與文字保存至 artifacts。
 
 ## 新增 provider
 

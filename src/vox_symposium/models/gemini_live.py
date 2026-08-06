@@ -10,7 +10,11 @@ from google.oauth2 import service_account
 
 from vox_symposium.audio import PcmAudio, normalize_audio
 from vox_symposium.config import gemini_uses_thinking_level
-from vox_symposium.models.base import QueueBackedRealtimeAudioModel, cancel_task
+from vox_symposium.models.base import (
+    QueueBackedRealtimeAudioModel,
+    RealtimeInterruption,
+    cancel_task,
+)
 
 VERTEX_AI_SCOPES = ("https://www.googleapis.com/auth/cloud-platform",)
 
@@ -143,6 +147,14 @@ class GeminiLiveModel(QueueBackedRealtimeAudioModel):
         if self.manual_activity:
             await self._session.send_realtime_input(activity_end=types.ActivityEnd())
 
+    async def flush_input_stream(self) -> None:
+        if self._session is None:
+            raise RuntimeError("Gemini Live session is not connected")
+        if self.manual_activity:
+            await self.end_audio_turn()
+            return
+        await self._session.send_realtime_input(audio_stream_end=True)
+
     async def close(self) -> None:
         reader_task = self._reader_task
         self._reader_task = None
@@ -163,6 +175,8 @@ class GeminiLiveModel(QueueBackedRealtimeAudioModel):
                     content = response.server_content
                     if not content:
                         continue
+                    if content.interrupted:
+                        await self._emit_event(RealtimeInterruption())
                     if content.output_transcription and content.output_transcription.text:
                         await self._text_out.put(content.output_transcription.text)
                     if not content.model_turn:

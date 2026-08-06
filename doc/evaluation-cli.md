@@ -51,8 +51,17 @@ vox-symposium-evaluate SCENARIO RESULT [options]
 | `--question-audio QUESTION_AUDIO` | scenario 的 `evaluation.question_audio` | 指定 evaluation question 音檔，會覆蓋 scenario JSON 內設定。支援 `.wav`；`.mp3` 會先轉成 WAV。 |
 | `--answer-audio ANSWER_AUDIO` | artifacts 內的 `robot-answer.wav` | 指定 robot evaluation answer 的輸出 WAV 路徑。只能在單筆 evaluation 使用。 |
 | `--frame-ms FRAME_MS` | `20` | 串流音訊時每個 audio frame 的毫秒數。 |
+| `--tick-duration-ms TICK_DURATION_MS` | `EVALUATION_TICK_DURATION_MS` 或 `200` | Full-duplex dialogue 的 TickResult 長度；每個 tick 兩個模型會同時交換固定長度的音訊，並保留跨 tick buffer。 |
 | `--audio-speed AUDIO_SPEED` | `EVALUATION_AUDIO_SPEED` 或 `1.0` | 音訊注入速度。`1.0` 是 real-time；更大的值會更快送音訊，可能降低長批次 timeout 風險，但也可能影響 VAD / turn detection；`0` 表示不 sleep。 |
 | `--no-tts` | `false` | 要求必須有 question audio；如果 scenario 沒有 `evaluation.question_audio` 且沒有傳 `--question-audio`，就直接失敗，不嘗試用 macOS `say` 產生題目音訊。 |
+
+dialogue 階段採 full-duplex tick loop：兩個 agent 每個 tick 同時交換固定長度音訊。預設
+`TickResult` 長度為 `200 ms`；可用 `EVALUATION_TICK_DURATION_MS` 或
+`--tick-duration-ms` 調整。每個 agent 的 provider output 會跨 tick 暫存，當單一 tick 有超出輸出時會
+截斷到 tick 長度並將剩餘部分留到下一 tick；收到 provider interruption event 時會清除被中斷 agent
+的 pending buffer。OpenAI WebSocket 會同步處理 response truncation；Gemini 會丟棄剩餘 queued output。
+dialogue tick 不會送 `audio_stream_end`；只有 evaluation question 整段輸入送完後才會 flush 一次，並維持
+同一個 provider session。
 
 當角色使用 `provider=minicpm` 或 `provider=freeze_omni` 時，scenario prompt
 會在 `Dialogue behavior` 自動追加短回覆規則：每次最多 2 句、最多問 1 個問題，且不要反覆總結。
